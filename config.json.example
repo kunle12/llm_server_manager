@@ -1,0 +1,29 @@
+{
+  "models": [
+    {
+      "name": "llama-7b",
+      "model_path": "/path/to/llama-7b.gguf",
+      "context_size": 4096,
+      "temperature": 0.7,
+      "threads": 8,
+      "port": 8081
+    },
+    {
+      "name": "codellama-13b",
+      "model_path": "/path/to/codellama-13b.gguf",
+      "context_size": 2048,
+      "temperature": 0.2,
+      "threads": 8,
+      "port": 8082,
+      "mmproj": "/path/to/codellama-13b-mmproj.gguf"
+    },
+    {
+      "name": "mistral-7b",
+      "model_path": "/path/to/mistral-7b.gguf",
+      "context_size": 4096,
+      "temperature": 0.5,
+      "threads": 4,
+      "port": 8083
+    }
+  ]
+}

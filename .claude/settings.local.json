@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./llm_server_manager:*)",
+      "Bash(curl:*)",
+      "Bash(python3 -c:*)"
+    ]
+  }
+}
