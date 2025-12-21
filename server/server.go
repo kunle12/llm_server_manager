@@ -75,6 +75,7 @@ func (a *App) setupRouter() {
 	api.HandleFunc("/models", a.handler.ListModels).Methods("GET")
 	api.HandleFunc("/models/{model}/start", a.handler.StartModel).Methods("POST")
 	api.HandleFunc("/models/{model}/stop", a.handler.StopModel).Methods("DELETE")
+	api.HandleFunc("/models/running", a.handler.GetRunningModel).Methods("GET")
 
 	a.router = r
 }
