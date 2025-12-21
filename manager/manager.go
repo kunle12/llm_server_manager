@@ -20,7 +20,7 @@ type ServerManager struct {
 	llamaPath     string
 	enableLogging bool
 	// Channel to signal goroutine to stop
-	stopChan      chan struct{}
+	stopChan chan struct{}
 }
 
 func New(configs map[string]*models.ModelConfig, logger func(format string, args ...interface{}), enableLogging bool) (*ServerManager, error) {
@@ -160,6 +160,7 @@ func (sm *ServerManager) buildCommand(config *models.ModelConfig) *exec.Cmd {
 		"-c", fmt.Sprintf("%d", config.ContextSize),
 		"--temp", fmt.Sprintf("%f", config.Temperature),
 		"-t", fmt.Sprintf("%d", config.Threads),
+		"--no-webui",
 		"--host", "0.0.0.0",
 		"--port", fmt.Sprintf("%d", port),
 	}

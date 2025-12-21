@@ -65,12 +65,12 @@ func runDaemon(configPath string, enableLogging bool, listenAddr string) error {
 		}
 	}
 
-	// Prepare command attributes
+	// Prepare command attributes with detached files
 	attr := &os.ProcAttr{
 		Files: []*os.File{
-			os.Stdin,  // stdin
-			os.Stdout, // stdout
-			os.Stderr, // stderr
+			nil, // stdin - will be detached
+			nil, // stdout - will be detached
+			nil, // stderr - will be detached
 		},
 		Sys: &syscall.SysProcAttr{
 			Setsid: true, // Create new session
@@ -78,11 +78,21 @@ func runDaemon(configPath string, enableLogging bool, listenAddr string) error {
 	}
 
 	// Start the process
-	_, err = os.StartProcess(execPath, args, attr)
+	proc, err := os.StartProcess(execPath, args, attr)
 	if err != nil {
 		return fmt.Errorf("failed to start daemon process: %w", err)
 	}
 
+	// Get the PID of the daemon process
+	pid := proc.Pid
+
+	// Write PID to file under /tmp
+	pidFile := "/tmp/llm_server_manager.pid"
+	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d\n", pid)), 0644); err != nil {
+		return fmt.Errorf("failed to write PID file: %w", err)
+	}
+
+	// Parent process exits gracefully
 	return nil
 }
 

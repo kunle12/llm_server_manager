@@ -110,6 +110,12 @@ The daemon flag will:
 - Detach from the terminal
 - Continue running in the background
 - Return immediately to the shell
+- Create a PID file at `/tmp/llm_server_manager.pid`
+
+You can stop the daemon using the PID file:
+```bash
+kill $(cat /tmp/llm_server_manager.pid)
+```
 
 Alternatively, you can use nohup for manual daemonization:
 
@@ -219,6 +225,28 @@ Stops the running server for the specified model.
 }
 ```
 
+### 4. Get Running Model
+
+**Endpoint**: `GET /api/v1/models/running`
+
+Returns information about the currently running model server.
+
+**Success Response** (when server is running):
+```json
+{
+  "success": true,
+  "message": "model 'llama-7b' is currently operating"
+}
+```
+
+**Success Response** (when no server is running):
+```json
+{
+  "success": false,
+  "message": "no model is operating"
+}
+```
+
 ## Example Usage with curl
 
 ### List all models
@@ -234,6 +262,11 @@ curl -X POST http://localhost:8080/api/v1/models/llama-7b/start
 ### Stop a model
 ```bash
 curl -X DELETE http://localhost:8080/api/v1/models/llama-7b/stop
+```
+
+### Check running model
+```bash
+curl http://localhost:8080/api/v1/models/running
 ```
 
 ## Server Status Values
