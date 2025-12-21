@@ -97,8 +97,21 @@ Logs will be saved to `/tmp/llama-server-{model_name}-{timestamp}.log`
 - `-config`: Path to configuration file (default: config.json)
 - `-listen`: Address to listen on (default: :8080)
 - `-log`: Enable logging llama-server output to `/tmp/llama-server-{model}-{timestamp}.log` (default: disabled)
+- `-daemon`: Run in background daemon mode (default: disabled)
 
 ### Run in Background (Daemon)
+
+```bash
+./llm_server_manager -daemon -config=config.json -listen=:8080
+```
+
+The daemon flag will:
+- Spawn the process in a new session
+- Detach from the terminal
+- Continue running in the background
+- Return immediately to the shell
+
+Alternatively, you can use nohup for manual daemonization:
 
 ```bash
 nohup ./llm_server_manager -config=config.json -listen=:8080 > manager.log 2>&1 &
