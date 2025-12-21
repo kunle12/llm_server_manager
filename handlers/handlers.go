@@ -53,7 +53,7 @@ func (h *Handler) StartModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	server, err := h.manager.StartModel(modelName)
+	err := h.manager.StartModel(modelName)
 	if err != nil {
 		h.sendJSON(w, http.StatusBadRequest, models.APIResponse{
 			Success: false,
@@ -65,9 +65,23 @@ func (h *Handler) StartModel(w http.ResponseWriter, r *http.Request) {
 	h.sendJSON(w, http.StatusOK, models.APIResponse{
 		Success: true,
 		Message: "server starting",
-		Data: models.ServerInfoResponse{
-			Server: server,
-		},
+	})
+}
+
+func (h *Handler) GetRunningModel(w http.ResponseWriter, r *http.Request) {
+	current := h.manager.GetCurrentServer()
+
+	if current == nil {
+		h.sendJSON(w, http.StatusOK, models.APIResponse{
+			Success: false,
+			Message: "no model is operating",
+		})
+		return
+	}
+
+	h.sendJSON(w, http.StatusOK, models.APIResponse{
+		Success: true,
+		Message: fmt.Sprintf("model '%s' is currently operating", current.ModelConfig.Name),
 	})
 }
 

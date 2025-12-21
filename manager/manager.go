@@ -19,6 +19,8 @@ type ServerManager struct {
 	logger        func(format string, args ...interface{})
 	llamaPath     string
 	enableLogging bool
+	// Channel to signal goroutine to stop
+	stopChan      chan struct{}
 }
 
 func New(configs map[string]*models.ModelConfig, logger func(format string, args ...interface{}), enableLogging bool) (*ServerManager, error) {
@@ -32,6 +34,7 @@ func New(configs map[string]*models.ModelConfig, logger func(format string, args
 		logger:        logger,
 		llamaPath:     llamaPath,
 		enableLogging: enableLogging,
+		stopChan:      make(chan struct{}),
 	}, nil
 }
 
@@ -47,21 +50,21 @@ func (sm *ServerManager) GetCurrentServer() *models.RunningServer {
 	return sm.server
 }
 
-func (sm *ServerManager) StartModel(modelName string) (*models.RunningServer, error) {
+func (sm *ServerManager) StartModel(modelName string) error {
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
 
 	if sm.server != nil && sm.server.Status == models.StatusRunning {
-		return nil, fmt.Errorf("a server is already running with model: %s", sm.server.ModelConfig.Name)
+		return fmt.Errorf("a server is already running with model: %s", sm.server.ModelConfig.Name)
 	}
 
 	config, exists := sm.configs[modelName]
 	if !exists {
-		return nil, fmt.Errorf("model '%s' not found in configuration", modelName)
+		return fmt.Errorf("model '%s' not found in configuration", modelName)
 	}
 
 	if err := validateModelFile(config.ModelPath); err != nil {
-		return nil, fmt.Errorf("model file validation failed: %w", err)
+		return fmt.Errorf("model file validation failed: %w", err)
 	}
 
 	sm.server = &models.RunningServer{
@@ -70,18 +73,16 @@ func (sm *ServerManager) StartModel(modelName string) (*models.RunningServer, er
 		StartTime:   time.Now(),
 	}
 
-	go sm.launchServer(config)
+	done := make(chan struct{})
+	go sm.launchServer(config, done)
 
-	return sm.server, nil
+	return nil
 }
 
-func (sm *ServerManager) launchServer(config *models.ModelConfig) {
+func (sm *ServerManager) launchServer(config *models.ModelConfig, done chan struct{}) {
+	// Update status to starting
 	sm.mutex.Lock()
-	if sm.server == nil {
-		sm.mutex.Unlock()
-		return
-	}
-	sm.server.Status = models.StatusRunning
+	sm.server.Status = models.StatusStarting
 	sm.mutex.Unlock()
 
 	sm.logger("Starting llama.cpp server for model: %s", config.Name)
@@ -103,31 +104,49 @@ func (sm *ServerManager) launchServer(config *models.ModelConfig) {
 
 	if err := cmd.Start(); err != nil {
 		sm.logger("Failed to start server: %v", err)
-		sm.mutex.Lock()
-		sm.server.Status = models.StatusStopped
-		sm.mutex.Unlock()
+		sm.clearServerState()
+		close(done)
 		return
 	}
 
+	pid := cmd.Process.Pid
+	sm.logger("Server started successfully with PID: %d", pid)
+
+	// Update PID and status atomically
 	sm.mutex.Lock()
 	if sm.server != nil {
-		sm.server.PID = cmd.Process.Pid
+		sm.server.PID = pid
+		sm.server.Status = models.StatusRunning
 	}
 	sm.mutex.Unlock()
+	close(done)
 
-	sm.logger("Server started successfully with PID: %d", cmd.Process.Pid)
-
-	if err := cmd.Wait(); err != nil {
+	// Wait for process to complete
+	err := cmd.Wait()
+	if err != nil {
 		sm.logger("Server process exited with error: %v", err)
 	}
 
-	sm.mutex.Lock()
-	if sm.server != nil && sm.server.PID == cmd.Process.Pid {
-		sm.server.Status = models.StatusStopped
-	}
-	sm.mutex.Unlock()
+	// Clear server state if this is still the active server
+	sm.clearServerStateIfPIDMatches(pid)
 
 	sm.logger("Server stopped for model: %s", config.Name)
+}
+
+// clearServerStateIfPIDMatches clears server state if PID matches
+func (sm *ServerManager) clearServerStateIfPIDMatches(pid int) {
+	sm.mutex.Lock()
+	if sm.server != nil && sm.server.PID == pid {
+		sm.server = nil
+	}
+	sm.mutex.Unlock()
+}
+
+// clearServerState clears the server state
+func (sm *ServerManager) clearServerState() {
+	sm.mutex.Lock()
+	sm.server = nil
+	sm.mutex.Unlock()
 }
 
 func (sm *ServerManager) buildCommand(config *models.ModelConfig) *exec.Cmd {
@@ -206,15 +225,19 @@ func (sm *ServerManager) createLogFile(modelName string) (*os.File, error) {
 
 func (sm *ServerManager) StopCurrent() error {
 	sm.mutex.Lock()
-	defer sm.mutex.Unlock()
 
 	if sm.server == nil || sm.server.Status != models.StatusRunning {
+		sm.mutex.Unlock()
 		return fmt.Errorf("no server is currently running")
 	}
 
+	pid := sm.server.PID
 	sm.server.Status = models.StatusStopping
 
-	p, err := os.FindProcess(sm.server.PID)
+	sm.mutex.Unlock()
+
+	// Kill the process
+	p, err := os.FindProcess(pid)
 	if err != nil {
 		return fmt.Errorf("failed to find process: %w", err)
 	}
@@ -223,7 +246,10 @@ func (sm *ServerManager) StopCurrent() error {
 		return fmt.Errorf("failed to kill process: %w", err)
 	}
 
-	sm.server.Status = models.StatusStopped
+	sm.logger("Server process killed for PID: %d", pid)
+
+	// Clear server state
+	sm.clearServerStateIfPIDMatches(pid)
 
 	return nil
 }
