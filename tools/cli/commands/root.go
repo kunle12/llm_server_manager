@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 const timeout = 30 * time.Second
@@ -44,7 +44,7 @@ func (r *RootCommand) Execute() error {
 }
 
 func (r *RootCommand) AddCommands() {
-	r.Cmd.PersistentFlags().StringP("server", "s", "http://localhost:8080", "LLM Server address")
+	r.Cmd.PersistentFlags().StringP("server", "s", "", "LLM Server address")
 	r.Cmd.Flags().BoolP("json", "j", false, "Output in JSON format")
 
 	r.Cmd.AddCommand(
@@ -57,11 +57,20 @@ func (r *RootCommand) AddCommands() {
 }
 
 func (r *RootCommand) GetServerURL() string {
-	server := viper.GetString("server")
+	// CLI flag takes priority
+	flag := r.Cmd.Flag("server")
+	if flag != nil && flag.Changed {
+		server := flag.Value.String()
+		if !hasScheme(server) {
+			server = "http://" + server
+		}
+		return server
+	}
+	// Fall back to environment variable or default
+	server := os.Getenv("LLM_MANAGER_URL")
 	if server == "" {
 		server = "http://localhost:8080"
 	}
-	// Add scheme if missing
 	if !hasScheme(server) {
 		server = "http://" + server
 	}
@@ -95,8 +104,4 @@ func (r *RootCommand) DoRequest(method, path string, body interface{}) (*http.Re
 	}
 
 	return resp, nil
-}
-
-func init() {
-	viper.SetDefault("server", "http://localhost:8080")
 }
