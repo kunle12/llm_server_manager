@@ -185,7 +185,8 @@ func getLlamaServerPath() string {
 	if path := os.Getenv("LLAMA_SERVER_PATH"); path != "" {
 		return path
 	}
-	return "llama-server"
+	execPath, _ := os.Executable()
+	return filepath.Join(filepath.Dir(execPath), "llama-server")
 }
 
 func validateLlamaServerPath(path string) error {
