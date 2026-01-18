@@ -25,10 +25,15 @@ func New(mgr *manager.ServerManager, logger func(format string, args ...interfac
 
 func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
 	modelMap := h.manager.ListModels()
+	current := h.manager.GetCurrentServer()
 
-	var modelList []models.ModelConfig
+	var modelList []models.ModelItem
 	for _, config := range modelMap {
-		modelList = append(modelList, *config)
+		active := current != nil && current.ModelConfig.Name == config.Name && current.Status == models.StatusRunning
+		modelList = append(modelList, models.ModelItem{
+			ModelConfig: *config,
+			Active:      active,
+		})
 	}
 
 	response := models.ModelListResponse{
@@ -64,7 +69,7 @@ func (h *Handler) StartModel(w http.ResponseWriter, r *http.Request) {
 
 	h.sendJSON(w, http.StatusOK, models.APIResponse{
 		Success: true,
-		Message: "server starting",
+		Message: fmt.Sprintf("model '%s' starting", modelName),
 	})
 }
 
@@ -124,7 +129,7 @@ func (h *Handler) StopModel(w http.ResponseWriter, r *http.Request) {
 
 	h.sendJSON(w, http.StatusOK, models.APIResponse{
 		Success: true,
-		Message: "server stopped successfully",
+		Message: fmt.Sprintf("model '%s' stopped successfully", current.ModelConfig.Name),
 	})
 }
 

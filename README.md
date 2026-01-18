@@ -27,8 +27,10 @@ llm_server_manager/
 │   └── manager.go      # Server management logic
 ├── handlers/
 │   └── handlers.go     # HTTP request handlers
-└── server/
-    └── server.go       # HTTP server setup
+├── server/
+│   └── server.go       # HTTP server setup
+└── tools/
+    └── cli/            # CLI tool for remote management
 ```
 
 ## Prerequisites
@@ -163,7 +165,8 @@ Returns a list of all configured models with their configuration details.
         "context_size": 4096,
         "temperature": 0.7,
         "threads": 8,
-        "port": 8081
+        "port": 8081,
+        "active": true
       }
     ]
   }
@@ -288,6 +291,33 @@ curl -X DELETE http://localhost:8080/api/v1/models/llama-7b/stop
 curl http://localhost:8080/api/v1/models/running
 ```
 
+## CLI Tool
+
+A command-line tool is available in `tools/cli/` for remote management:
+
+```bash
+# Build the CLI
+cd tools/cli
+go build -o llmcontrol .
+
+# List models
+./llmcontrol list
+
+# Start a model
+./llmcontrol start llama-7b
+
+# Stop a model
+./llmcontrol stop llama-7b
+
+# Check running model
+./llmcontrol status
+
+# Connect to remote server
+./llmcontrol -s http://192.168.1.100:8080 list
+```
+
+See [tools/cli/README.md](tools/cli/README.md) for full documentation.
+
 ## Server Status Values
 
 - `stopped`: No server is running
@@ -348,8 +378,10 @@ llm_server_manager/
 │   └── manager.go      # Server management
 ├── handlers/
 │   └── handlers.go     # HTTP handlers
-└── server/
-    └── server.go       # HTTP server
+├── server/
+│   └── server.go       # HTTP server
+└── tools/
+    └── cli/            # CLI tool (cobra-based)
 ```
 
 ### Dependencies

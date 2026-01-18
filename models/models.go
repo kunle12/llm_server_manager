@@ -35,7 +35,12 @@ type APIResponse struct {
 }
 
 type ModelListResponse struct {
-	Models []ModelConfig `json:"models"`
+	Models []ModelItem `json:"models"`
+}
+
+type ModelItem struct {
+	ModelConfig
+	Active bool `json:"active"`
 }
 
 type ServerInfoResponse struct {

@@ -70,14 +70,20 @@ func (c *ListCommand) run(cmd *cobra.Command, args []string) error {
 			fmt.Fprintln(w, model["name"])
 		}
 	} else {
-		fmt.Fprintln(w, "NAME\tMODEL PATH\tCONTEXT\tTHREADS")
+		fmt.Fprintln(w, "NAME\tMODEL PATH\tCONTEXT SIZE\tTEMPERATURE\tTHREADS\tACTIVE")
 		for _, m := range modelsData {
 			model := m.(map[string]interface{})
-			fmt.Fprintf(w, "%s\t%s\t%d\t%d\n",
+			activeStr := "false"
+			if model["active"].(bool) {
+				activeStr = "true"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%d\t%.2f\t%d\t%s\n",
 				model["name"],
 				model["model_path"],
 				int(model["context_size"].(float64)),
-				int(model["threads"].(float64)))
+				model["temperature"].(float64),
+				int(model["threads"].(float64)),
+				activeStr)
 		}
 	}
 	w.Flush()

@@ -10,20 +10,46 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install dependencies
 go mod tidy
 
-# Build the application
+# Build the server
 go build -o llm_server_manager
 
-# Run with custom config and listen address
+# Build the CLI tool
+cd tools/cli && go build -o llmcontrol && cd ..
+
+# Run server with custom config and listen address
 ./llm_server_manager -config=config.json -listen=:8080
 
 # Run in background (daemon mode)
 nohup ./llm_server_manager -config=config.json -listen=:8080 > manager.log 2>&1 &
 ```
 
-### Command Line Options
+### Server Command Line Options
 
 - `-config`: Path to configuration file (default: `llm_config.json`)
 - `-listen`: Address to listen on (default: `:8080`)
+- `-log`: Enable logging to `/tmp/llama-server-{model}-{timestamp}.log`
+- `-daemon`: Run in background daemon mode
+
+### CLI Tool Commands
+
+```bash
+# List all configured models
+./llmcontrol list
+
+# Start a model
+./llmcontrol start llama-7b
+
+# Stop a model
+./llmcontrol stop llama-7b
+
+# Check running model
+./llmcontrol status
+
+# Connect to remote server
+./llmcontrol -s http://192.168.1.100:8080 list
+```
+
+See [tools/cli/README.md](tools/cli/README.md) for full CLI documentation.
 
 ### Prerequisites
 
@@ -129,9 +155,10 @@ The `manager` package handles llama.cpp process lifecycle:
 ### 2. HTTP Handlers (handlers/handlers.go)
 
 **Endpoints**:
-- `GET /api/v1/models`: List all configured models
+- `GET /api/v1/models`: List all configured models (includes `active` field)
 - `POST /api/v1/models/{model}/start`: Start a model server
 - `DELETE /api/v1/models/{model}/stop`: Stop a model server
+- `GET /api/v1/models/running`: Get currently running model
 
 **Features**:
 - CORS support for cross-origin requests
@@ -234,7 +261,13 @@ All operations log to stdout with timestamp:
 
 ## Dependencies
 
+### Server Dependencies
 - **github.com/gorilla/mux v1.8.1**: HTTP router
+- **github.com/spf13/viper v1.18.2**: Configuration management
+- **github.com/fsnotify/fsnotify v1.7.0**: File watching for auto-reload
+
+### CLI Dependencies
+- **github.com/spf13/cobra v1.8.0**: CLI framework
 - **github.com/spf13/viper v1.18.2**: Configuration management
 
 ## Security Considerations
@@ -269,3 +302,19 @@ All operations log to stdout with timestamp:
 - The `host` field does not exist in config (hardcoded to 0.0.0.0 in manager.go:164)
 - No tests exist (test files would be `*_test.go`)
 - No .gitignore rules for binary or log files (consider adding)
+
+### CLI Tool Structure (tools/cli/)
+
+```
+tools/cli/
+├── main.go              # Entry point
+├── commands/
+│   ├── root.go         # Root command, HTTP client
+│   ├── list.go         # list command
+│   ├── start.go        # start command
+│   ├── stop.go         # stop command
+│   ├── status.go       # status command
+│   └── version.go      # version command
+└── llmcontrol/
+    └── models.go       # API response types
+```
