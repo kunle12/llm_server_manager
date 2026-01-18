@@ -229,7 +229,7 @@ func (sm *ServerManager) StopCurrent() error {
 
 	if sm.server == nil || sm.server.Status != models.StatusRunning {
 		sm.mutex.Unlock()
-		return fmt.Errorf("no server is currently running")
+		return fmt.Errorf("no model is currently running")
 	}
 
 	pid := sm.server.PID

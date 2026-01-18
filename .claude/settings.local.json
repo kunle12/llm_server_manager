@@ -3,7 +3,9 @@
     "allow": [
       "Bash(./llm_server_manager:*)",
       "Bash(curl:*)",
-      "Bash(python3 -c:*)"
+      "Bash(python3 -c:*)",
+      "Bash(go build:*)",
+      "Bash(go mod tidy:*)"
     ]
   }
 }

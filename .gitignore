@@ -1,5 +1,6 @@
 # Binaries
 llm_server_manager
+llm-cli
 *.exe
 *.exe~
 *.dll
