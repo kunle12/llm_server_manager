@@ -12,6 +12,7 @@ A professional Go application for managing multiple llama.cpp server instances w
 - **Graceful Shutdown**: Properly stops servers on application termination
 - **Thread-Safe**: Concurrent-safe server management with mutex locks
 - **Logging**: Optional logging of llama-server output to files
+- **Auto-Reload**: Configurations are reloaded automatically when the config file is modified
 
 ## Architecture
 
@@ -73,6 +74,27 @@ Create a `config.json` file based on `config.json.example`:
 | threads     | int     | Number of CPU threads to use         |
 | port        | int     | Port for llama.cpp server to listen  |
 | mmproj      | string  | Path to mmproj file (optional)       |
+
+### Auto-Reload Configurations
+
+The server automatically watches the configuration file for changes. When the file is modified:
+
+1. The server detects the change
+2. Reloads the configuration from the file
+3. Updates the available models without restarting
+
+Example log output when config is reloaded:
+```
+[LLM Manager] Config file changed, reloading...
+[LLM Manager] Configuration reloaded successfully
+```
+
+New models added to the configuration will be immediately available via the API:
+```bash
+curl http://localhost:8080/api/v1/models
+```
+
+**Note**: Only model configurations are reloaded. Running servers are not affected.
 
 ## Usage
 
@@ -334,6 +356,7 @@ llm_server_manager/
 
 - **github.com/gorilla/mux**: HTTP router
 - **github.com/spf13/viper**: Configuration management
+- **github.com/fsnotify/fsnotify**: File system notifications for auto-reload
 
 ## License
 
