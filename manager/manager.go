@@ -254,3 +254,21 @@ func (sm *ServerManager) StopCurrent() error {
 
 	return nil
 }
+
+// ReloadConfigs updates the manager's configurations with new ones
+func (sm *ServerManager) ReloadConfigs(newConfigs map[string]*models.ModelConfig) {
+	sm.mutex.Lock()
+	sm.configs = newConfigs
+	sm.mutex.Unlock()
+	sm.logger("Configuration reloaded successfully")
+}
+
+// GetStopChan returns the stop channel for the watcher
+func (sm *ServerManager) GetStopChan() <-chan struct{} {
+	return sm.stopChan
+}
+
+// CloseStopChan closes the stop channel
+func (sm *ServerManager) CloseStopChan() {
+	close(sm.stopChan)
+}

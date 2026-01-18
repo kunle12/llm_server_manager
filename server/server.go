@@ -15,17 +15,19 @@ import (
 	"llamamanager/manager"
 	"llamamanager/models"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/gorilla/mux"
 )
 
 type App struct {
-	mgr          *manager.ServerManager
-	handler      *handlers.Handler
-	logger       func(format string, args ...interface{})
-	router       *mux.Router
-	httpSrv      *http.Server
-	config       *config.Config
+	mgr           *manager.ServerManager
+	handler       *handlers.Handler
+	logger        func(format string, args ...interface{})
+	router        *mux.Router
+	httpSrv       *http.Server
+	config        *config.Config
 	enableLogging bool
+	configPath    string
 }
 
 func New(configPath string, enableLogging bool) (*App, error) {
@@ -50,11 +52,12 @@ func New(configPath string, enableLogging bool) (*App, error) {
 	h := handlers.New(mgr, logger)
 
 	app := &App{
-		mgr:          mgr,
-		handler:      h,
-		logger:       logger,
-		config:       cfg,
+		mgr:           mgr,
+		handler:       h,
+		logger:        logger,
+		config:        cfg,
 		enableLogging: enableLogging,
+		configPath:    configPath,
 	}
 
 	app.setupRouter()
@@ -64,6 +67,64 @@ func New(configPath string, enableLogging bool) (*App, error) {
 
 func (a *App) GetModelCount() int {
 	return len(a.config.Models)
+}
+
+// WatchConfig starts a goroutine that watches the config file for changes
+func (a *App) WatchConfig() {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		a.logger("Failed to create config watcher: %v", err)
+		return
+	}
+
+	// Watch the config file
+	if err := watcher.Add(a.configPath); err != nil {
+		a.logger("Failed to watch config file: %v", err)
+		return
+	}
+
+	go func() {
+		for {
+			select {
+			case <-a.mgr.GetStopChan():
+				watcher.Close()
+				return
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				// Reload on write/remove operations
+				if event.Op&(fsnotify.Write|fsnotify.Remove) != 0 {
+					a.logger("Config file changed, reloading...")
+					if err := a.reloadConfig(); err != nil {
+						a.logger("Failed to reload config: %v", err)
+					}
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				a.logger("Config watcher error: %v", err)
+			}
+		}
+	}()
+}
+
+// reloadConfig reloads the configuration from file and updates the manager
+func (a *App) reloadConfig() error {
+	cfg, err := config.Reload(a.configPath)
+	if err != nil {
+		return err
+	}
+
+	modelMap := make(map[string]*models.ModelConfig)
+	for i := range cfg.Models {
+		modelMap[cfg.Models[i].Name] = &cfg.Models[i]
+	}
+
+	a.mgr.ReloadConfigs(modelMap)
+	a.config = cfg
+	return nil
 }
 
 func (a *App) setupRouter() {
@@ -89,6 +150,9 @@ func (a *App) Start(listenAddr string) error {
 		IdleTimeout:  60 * time.Second,
 	}
 
+	// Start config file watcher
+	a.WatchConfig()
+
 	go func() {
 		a.logger("Server starting on %s", listenAddr)
 		if err := a.httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -113,6 +177,9 @@ func (a *App) Shutdown() error {
 			return fmt.Errorf("failed to shutdown server: %w", err)
 		}
 	}
+
+	// Signal the config watcher to stop
+	a.mgr.CloseStopChan()
 
 	if a.mgr.GetCurrentServer() != nil {
 		a.logger("Stopping running server...")
