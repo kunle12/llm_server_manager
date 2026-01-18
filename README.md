@@ -33,8 +33,7 @@ llm_server_manager/
 ## Prerequisites
 
 - Go 1.21 or later
-- llama.cpp installed and available in PATH
-- llama-cli binary (or modify manager.go to use the correct command)
+- llama.cpp installed and available in PATH (set `LLAMA_SERVER_PATH` env var to override)
 
 ## Installation
 
@@ -57,8 +56,7 @@ Create a `config.json` file based on `config.json.example`:
       "context_size": 4096,
       "temperature": 0.7,
       "threads": 8,
-      "port": 8081,
-      "host": "127.0.0.1"
+      "port": 8081
     }
   ]
 }
@@ -143,8 +141,7 @@ Returns a list of all configured models with their configuration details.
         "context_size": 4096,
         "temperature": 0.7,
         "threads": 8,
-        "port": 8081,
-        "host": "127.0.0.1"
+        "port": 8081
       }
     ]
   }
@@ -345,13 +342,13 @@ This is a demonstration project. Use at your own risk.
 ## Troubleshooting
 
 ### Server won't start
-- Check llama.cpp is installed: `llama-cli --help`
+- Check llama.cpp is installed: `llama-server --help`
 - Verify model file exists and is readable
 - Check the port is not already in use
 - Review logs for errors
 
 ### Permission denied
-- Ensure llama-cli is executable
+- Ensure llama-server is executable
 - Check file permissions on model files
 
 ### Model won't load

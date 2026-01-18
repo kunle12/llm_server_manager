@@ -28,8 +28,7 @@ nohup ./llm_server_manager -config=config.json -listen=:8080 > manager.log 2>&1 
 ### Prerequisites
 
 - Go 1.21 or later
-- llama.cpp installed and available in PATH (or set `LLAMA_SERVER_PATH` environment variable)
-- llama-cli binary (modify `manager.go` if using different command name)
+- llama.cpp installed and available in PATH (set `LLAMA_SERVER_PATH` to override, defaults to `llama-server`)
 
 ## High-Level Architecture
 
@@ -104,7 +103,7 @@ The application uses `sync.RWMutex` for thread-safe operations:
 ### Process Management
 
 The `manager` package handles llama.cpp process lifecycle:
-- **Start**: Launches `llama-server` or `llama-cli` as subprocess
+- **Start**: Launches `llama-server` as subprocess
 - **Monitor**: Tracks PID, status, and start time
 - **Stop**: Sends SIGKILL to running process
 - **Validation**: Checks model file existence and llama.cpp availability
@@ -152,8 +151,7 @@ The `manager` package handles llama.cpp process lifecycle:
       "context_size": 4096,
       "temperature": 0.7,
       "threads": 8,
-      "port": 8081,
-      "host": "127.0.0.1"
+      "port": 8081
     }
   ]
 }
@@ -206,10 +204,11 @@ All endpoints return JSON in this format:
 
 ### llama.cpp Command Construction
 
-The manager builds this command structure (manager/manager.go:118-135):
+The manager builds this command structure (manager/manager.go:152-182):
 ```bash
-llama-server -m <model_path> -c <context_size> --temp <temperature> -t <threads> --host 0.0.0.0 --port <port>
+llama-server -m <model_path> -c <context_size> --temp <temperature> -t <threads> --no-webui --host 0.0.0.0 --port <port>
 ```
+With optional flags: `--log-disable` (when logging disabled), `--mmproj <path>` (if configured).
 
 Override the binary path with `LLAMA_SERVER_PATH` environment variable.
 
@@ -267,6 +266,6 @@ All operations log to stdout with timestamp:
 
 - The application is designed to run one llama.cpp server at a time
 - ServerManager prevents starting a new server if one is already running
-- The `host` field in config is not used (hardcoded to 0.0.0.0 in manager.go:129)
+- The `host` field does not exist in config (hardcoded to 0.0.0.0 in manager.go:164)
 - No tests exist (test files would be `*_test.go`)
 - No .gitignore rules for binary or log files (consider adding)
