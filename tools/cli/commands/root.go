@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -24,6 +25,7 @@ var validAPIKeyPattern = regexp.MustCompile(`^[a-zA-Z0-9]{16}$`)
 type RootCommand struct {
 	Cmd            *cobra.Command
 	HTTPClient     *http.Client
+	TLSClient      *http.Client
 	SkipTLSVerify  bool
 }
 
@@ -41,14 +43,29 @@ Examples:
 `,
 	}
 
+	// Validate API key at startup and warn if invalid
+	apiKey := os.Getenv(envAPIKey)
+	if apiKey != "" && !validAPIKeyPattern.MatchString(apiKey) {
+		fmt.Fprintf(os.Stderr, "Warning: %s is set but does not match expected format (16 alphanumeric characters)\n", envAPIKey)
+	}
+
 	r := &RootCommand{
 		Cmd:            cmd,
 		HTTPClient:     &http.Client{Timeout: timeout},
+		TLSClient:      createTLSClient(),
 		SkipTLSVerify:  false,
 	}
 
 	r.AddCommands()
 	return r
+}
+
+// createTLSClient creates a reusable HTTP client that skips TLS verification
+func createTLSClient() *http.Client {
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	return &http.Client{Transport: tr, Timeout: timeout}
 }
 
 func (r *RootCommand) Execute() error {
@@ -101,14 +118,11 @@ func (r *RootCommand) GetAPIURL(path string) string {
 }
 
 func hasScheme(s string) bool {
-	return len(s) >= 7 && (s[:7] == "http://" || s[:8] == "https://")
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
 }
 
 func (r *RootCommand) DoRequest(method, path string, body interface{}) (*http.Response, error) {
 	urlStr := r.GetAPIURL(path)
-
-	// Parse URL to check scheme for TLS verification
-	parsedURL, _ := url.Parse(urlStr)
 
 	req, err := http.NewRequest(method, urlStr, nil)
 	if err != nil {
@@ -121,13 +135,10 @@ func (r *RootCommand) DoRequest(method, path string, body interface{}) (*http.Re
 		req.Header.Set(apiKeyFlag, apiKey)
 	}
 
-	// Use custom transport for TLS skip verification
+	// Use pre-created TLS client if needed
 	var client *http.Client
-	if r.SkipTLSVerify && parsedURL.Scheme == "https" {
-		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}
-		client = &http.Client{Transport: tr, Timeout: timeout}
+	if r.SkipTLSVerify && strings.HasPrefix(urlStr, "https://") {
+		client = r.TLSClient
 	} else {
 		client = r.HTTPClient
 	}

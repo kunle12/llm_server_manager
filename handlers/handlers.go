@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 
 	"llamamanager/manager"
 	"llamamanager/models"
@@ -14,15 +15,17 @@ import (
 )
 
 const (
-	apiKeyHeader = "api-key"
-	envAPIKey    = "LLM_MANAGER_API_KEY"
+	apiKeyHeader     = "api-key"
+	envAPIKey        = "LLM_MANAGER_API_KEY"
+	envAllowedOrigins = "LLM_ALLOWED_ORIGINS"
 )
 
 type Handler struct {
-	manager  *manager.ServerManager
-	logger   func(format string, args ...interface{})
-	apiKey   string
-	enabled  bool
+	manager        *manager.ServerManager
+	logger         func(format string, args ...interface{})
+	apiKey         string
+	enabled        bool
+	allowedOrigins map[string]bool
 }
 
 // validAPIKeyPattern matches exactly 16 alphanumeric characters
@@ -43,11 +46,27 @@ func New(mgr *manager.ServerManager, logger func(format string, args ...interfac
 		logger("API key authentication disabled (environment variable not set)")
 	}
 
+	// Parse allowed origins from environment variable
+	allowedOrigins := make(map[string]bool)
+	originsEnv := os.Getenv(envAllowedOrigins)
+	if originsEnv != "" {
+		for _, origin := range strings.Split(originsEnv, ",") {
+			origin = strings.TrimSpace(origin)
+			if origin != "" {
+				allowedOrigins[origin] = true
+			}
+		}
+		if len(allowedOrigins) > 0 {
+			logger("CORS restricted to allowed origins: %s", originsEnv)
+		}
+	}
+
 	return &Handler{
-		manager: mgr,
-		logger:  logger,
-		apiKey:  apiKey,
-		enabled: enabled,
+		manager:        mgr,
+		logger:         logger,
+		apiKey:         apiKey,
+		enabled:        enabled,
+		allowedOrigins: allowedOrigins,
 	}
 }
 
@@ -175,9 +194,20 @@ func (h *Handler) sendJSON(w http.ResponseWriter, statusCode int, response inter
 func (h *Handler) CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
+
 		if origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Vary", "Origin")
+			// If allowed origins are configured, only allow those
+			if len(h.allowedOrigins) > 0 {
+				if h.allowedOrigins[origin] {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					w.Header().Set("Vary", "Origin")
+				}
+				// Otherwise, don't set CORS headers (origin not allowed)
+			} else {
+				// No restrictions - allow any origin (legacy behavior)
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
+			}
 		}
 
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")

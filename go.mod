@@ -6,6 +6,7 @@ require (
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/gorilla/mux v1.8.1
 	github.com/spf13/viper v1.18.2
+	golang.org/x/time v0.5.0
 )
 
 require (

@@ -86,9 +86,9 @@ func runDaemon(configPath string, enableLogging bool, listenAddr string) error {
 	// Get the PID of the daemon process
 	pid := proc.Pid
 
-	// Write PID to file under /tmp
+	// Write PID to file under /tmp with restricted permissions
 	pidFile := "/tmp/llm_server_manager.pid"
-	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d\n", pid)), 0644); err != nil {
+	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d\n", pid)), 0600); err != nil {
 		return fmt.Errorf("failed to write PID file: %w", err)
 	}
 

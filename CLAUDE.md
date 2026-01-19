@@ -30,6 +30,12 @@ nohup ./llm_server_manager -config=config.json -listen=:8080 > manager.log 2>&1 
 - `-log`: Enable logging to `/tmp/llama-server-{model}-{timestamp}.log`
 - `-daemon`: Run in background daemon mode
 
+### Environment Variables
+
+- `LLM_MANAGER_API_KEY`: API key for authentication (16 alphanumeric characters)
+- `LLAMA_SERVER_PATH`: Path to llama-server binary (defaults to `llama-server`)
+- `LLM_ALLOWED_ORIGINS`: Comma-separated list of allowed CORS origins (e.g., `http://localhost:3000,https://example.com`)
+
 ### CLI Tool Commands
 
 ```bash
@@ -51,6 +57,9 @@ nohup ./llm_server_manager -config=config.json -listen=:8080 > manager.log 2>&1 
 # Connect via HTTPS with API key authentication
 export LLM_MANAGER_API_KEY="abcdef1234567890"
 ./llm-cli -s https://192.168.1.100:8080 list
+
+# Skip TLS certificate verification (for self-signed certs)
+./llm-cli -s https://192.168.1.100:8080 --skip-tls-verify list
 ```
 
 See [tools/cli/README.md](tools/cli/README.md) for full CLI documentation.
@@ -233,6 +242,26 @@ All endpoints return JSON in this format:
 
 ## Important Implementation Details
 
+### HTTP Middleware
+
+The server applies middleware in this order (server/server.go:174-182):
+
+1. **Rate Limiting**: 10 requests/second per IP with 20 burst capacity
+   - Uses token bucket algorithm from `golang.org/x/time/rate`
+   - Rate limited before authentication (applies to all requests)
+   - Excess requests return `429 Too Many Requests`
+
+2. **Request Size Limit**: 1KB maximum body size
+   - Prevents memory exhaustion from large request bodies
+   - Returns `413 Request Entity Too Large` for oversized bodies
+
+3. **CORS**: Adds appropriate headers based on origin
+   - If `LLM_ALLOWED_ORIGINS` set: only allowed origins get CORS headers
+   - Otherwise: all origins permitted (legacy behavior)
+
+4. **API Key Authentication**: Validates `api-key` header for `/api/v1/*` routes
+   - Only applied to API routes, not health check endpoints
+
 ### llama.cpp Command Construction
 
 The manager builds this command structure (manager/manager.go:152-182):
@@ -269,6 +298,7 @@ All operations log to stdout with timestamp:
 - **github.com/gorilla/mux v1.8.1**: HTTP router
 - **github.com/spf13/viper v1.18.2**: Configuration management
 - **github.com/fsnotify/fsnotify v1.7.0**: File watching for auto-reload
+- **golang.org/x/time v0.5.0**: Rate limiting
 
 ### CLI Dependencies
 - **github.com/spf13/cobra v1.8.0**: CLI framework
@@ -276,11 +306,43 @@ All operations log to stdout with timestamp:
 
 ## Security Considerations
 
-- CORS enabled for all endpoints
-- No authentication (add reverse proxy if needed)
-- Process execution uses direct command execution
-- Model names validated to prevent command injection
-- No input sanitization for model paths (trusts config file)
+### Authentication
+
+- API key authentication via `LLM_MANAGER_API_KEY` environment variable
+- Key must be exactly 16 alphanumeric characters
+- Key validated on each API request via `api-key` header
+- API key validated at CLI startup with warning if invalid format
+
+### CORS Security
+
+- Default: CORS enabled for all origins (`Access-Control-Allow-Origin: *`)
+- Restricted mode: Set `LLM_ALLOWED_ORIGINS` to comma-separated origins
+- Requests from non-allowed origins receive no CORS headers
+- Vary: Origin header always set for cache-aware proxies
+
+### Rate Limiting
+
+- Per-IP rate limiting: 10 requests/second, burst of 20
+- Excess requests receive `429 Too Many Requests`
+- Uses `golang.org/x/time/rate` for token bucket algorithm
+- Rate limiter applied before authentication
+
+### Request Size Limits
+
+- Request body limited to 1KB
+- Prevents memory exhaustion attacks
+- Uses `http.MaxBytesReader` handler
+
+### PID File Permissions
+
+- Daemon PID file written with `0600` permissions (readable only by owner)
+- Location: `/tmp/llm_server_manager.pid`
+
+### TLS Verification
+
+- CLI supports `--skip-tls-verify` flag for self-signed certificates
+- Uses reusable `TLSClient` with custom transport for TLS skip
+- Default: TLS certificates fully verified
 
 ## Troubleshooting
 
@@ -313,7 +375,7 @@ All operations log to stdout with timestamp:
 tools/cli/
 ├── main.go              # Entry point
 ├── commands/
-│   ├── root.go         # Root command, HTTP client
+│   ├── root.go         # Root command, HTTP client, TLS skip verify
 │   ├── list.go         # list command
 │   ├── start.go        # start command
 │   ├── stop.go         # stop command
@@ -322,3 +384,9 @@ tools/cli/
 └── llmcontrol/
     └── models.go       # API response types
 ```
+
+**CLI Flags**:
+- `-s, --server`: Server URL (default: `http://localhost:8080`)
+- `--skip-tls-verify`: Skip TLS certificate verification (for self-signed certs)
+- `--api-key`: API key for authentication (alternative to env var)
+- `--timeout`: Request timeout in seconds (default: 30)

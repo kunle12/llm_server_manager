@@ -17,6 +17,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/gorilla/mux"
+	"golang.org/x/time/rate"
 )
 
 type App struct {
@@ -28,6 +29,47 @@ type App struct {
 	config        *config.Config
 	enableLogging bool
 	configPath    string
+}
+
+// rateLimiter provides per-IP rate limiting
+type rateLimiter struct {
+	limiters map[string]*rate.Limiter
+	rate     rate.Limit
+	burst    int
+}
+
+func newRateLimiter(r rate.Limit, b int) *rateLimiter {
+	return &rateLimiter{
+		limiters: make(map[string]*rate.Limiter),
+		rate:     r,
+		burst:    b,
+	}
+}
+
+func (rl *rateLimiter) getLimiter(ip string) *rate.Limiter {
+	rl.limiters[ip] = rate.NewLimiter(rl.rate, rl.burst)
+	return rl.limiters[ip]
+}
+
+func (rl *rateLimiter) limit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := r.RemoteAddr
+		if !rl.getLimiter(ip).Allow() {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// maxBytesReader limits request body size to prevent memory exhaustion attacks
+func maxBytesReader(maxBytes int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func New(configPath string, enableLogging bool) (*App, error) {
@@ -131,6 +173,13 @@ func (a *App) setupRouter() {
 	r := mux.NewRouter()
 
 	r.Use(a.handler.CORS)
+
+	// Rate limiting: 10 requests per second, burst of 20
+	rl := newRateLimiter(rate.Limit(10), 20)
+	r.Use(rl.limit)
+
+	// Limit request body to 1KB to prevent memory exhaustion
+	r.Use(maxBytesReader(1024))
 
 	api := r.PathPrefix("/api/v1").Subrouter()
 	api.Use(a.handler.RequireAPIKey)
