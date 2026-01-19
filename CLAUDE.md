@@ -14,7 +14,7 @@ go mod tidy
 go build -o llm_server_manager
 
 # Build the CLI tool
-cd tools/cli && go build -o llmcontrol && cd ..
+cd tools/cli && go build -o llm-cli && cd ..
 
 # Run server with custom config and listen address
 ./llm_server_manager -config=config.json -listen=:8080
@@ -34,19 +34,23 @@ nohup ./llm_server_manager -config=config.json -listen=:8080 > manager.log 2>&1 
 
 ```bash
 # List all configured models
-./llmcontrol list
+./llm-cli list
 
 # Start a model
-./llmcontrol start llama-7b
+./llm-cli start llama-7b
 
 # Stop a model
-./llmcontrol stop llama-7b
+./llm-cli stop llama-7b
 
 # Check running model
-./llmcontrol status
+./llm-cli status
 
 # Connect to remote server
-./llmcontrol -s http://192.168.1.100:8080 list
+./llm-cli -s http://192.168.1.100:8080 list
+
+# Connect via HTTPS with API key authentication
+export LLM_MANAGER_API_KEY="abcdef1234567890"
+./llm-cli -s https://192.168.1.100:8080 list
 ```
 
 See [tools/cli/README.md](tools/cli/README.md) for full CLI documentation.

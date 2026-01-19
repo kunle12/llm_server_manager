@@ -7,16 +7,16 @@ A command-line tool to interact with [LLM Server Manager](https://github.com/you
 ```bash
 # Build from source
 cd tools/cli
-go build -o llmcontrol .
+go build -o llm-cli .
 
 # Move to PATH
-mv llmcontrol /usr/local/bin/
+mv llm-cli /usr/local/bin/
 ```
 
 ## Usage
 
 ```bash
-llmcontrol [options] <command> [arguments]
+llm-cli [options] <command> [arguments]
 ```
 
 ### Options
@@ -25,6 +25,7 @@ llmcontrol [options] <command> [arguments]
 |------|-------|---------|-------------|
 | `--server` | `-s` | `http://localhost:8080` | LLM Server address |
 | `--json` | `-j` | `false` | Output in JSON format |
+| `--skip-tls-verify` | - | `false` | Skip TLS certificate verification for HTTPS connections |
 
 ### Commands
 
@@ -41,7 +42,7 @@ llmcontrol [options] <command> [arguments]
 ### List all configured models
 
 ```bash
-$ llmcontrol list
+$ llm-cli list
 NAME            MODEL PATH                        CONTEXT SIZE   TEMPERATURE   THREADS   ACTIVE
 llama-7b        /models/llama-7b/llama-7b.gguf    4096           0.70          8         false
 mistral-7b      /models/mistral-7b/mistral-7b.gguf   4096       0.70          8         true
@@ -49,51 +50,75 @@ mistral-7b      /models/mistral-7b/mistral-7b.gguf   4096       0.70          8 
 
 With JSON output:
 ```bash
-$ llmcontrol --json list
+$ llm-cli --json list
 {"success":true,"data":{"models":[...]}}
 ```
 
 ### Start a model
 
 ```bash
-$ llmcontrol start llama-7b
+$ llm-cli start llama-7b
 Server starting: model 'llama-7b' starting
 ```
 
 ### Stop a model
 
 ```bash
-$ llmcontrol stop llama-7b
+$ llm-cli stop llama-7b
 Stopped: model 'llama-7b' stopped successfully
 ```
 
 ### Check running status
 
 ```bash
-$ llmcontrol status
+$ llm-cli status
 model 'mistral-7b' is currently operating
 ```
 
 Or check if any model is running:
 ```bash
-$ llmcontrol running
+$ llm-cli running
 ```
 
 ### Connect to remote server
 
 ```bash
 # Via command line flag
-llmcontrol --server=http://192.168.1.100:8080 list
+llm-cli --server=http://192.168.1.100:8080 list
 
 # Via environment variable
 export LLAMA_SERVER_URL="http://192.168.1.100:8080"
-llmcontrol list
+llm-cli list
 ```
+
+### Connect via HTTPS
+
+```bash
+# Standard HTTPS (valid certificates)
+llm-cli --server=https://192.168.1.100:8080 list
+
+# Self-signed certificates (skip TLS verification)
+llm-cli --server=https://192.168.1.100:8080 --skip-tls-verify list
+```
+
+## Authentication
+
+When the server is configured with API key authentication, set the `LLM_MANAGER_API_KEY` environment variable:
+
+```bash
+export LLM_MANAGER_API_KEY="abcdef1234567890"
+llm-cli list
+```
+
+The API key must be exactly 16 alphanumeric characters.
 
 ## Configuration
 
-The CLI reads configuration from:
+The CLI reads configuration in the following priority:
 
 1. Command-line flags (highest priority)
 2. Environment variable `LLAMA_SERVER_URL`
 3. Default: `http://localhost:8080`
+
+For authentication:
+- Environment variable `LLM_MANAGER_API_KEY` (must be 16 alphanumeric characters)
