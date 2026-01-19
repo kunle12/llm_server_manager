@@ -86,7 +86,7 @@ $ llmcontrol running
 llmcontrol --server=http://192.168.1.100:8080 list
 
 # Via environment variable
-export LLM_MANAGER_URL="http://192.168.1.100:8080"
+export LLAMA_SERVER_URL="http://192.168.1.100:8080"
 llmcontrol list
 ```
 
@@ -95,5 +95,5 @@ llmcontrol list
 The CLI reads configuration from:
 
 1. Command-line flags (highest priority)
-2. Environment variable `LLM_MANAGER_URL`
+2. Environment variable `LLAMA_SERVER_URL`
 3. Default: `http://localhost:8080`

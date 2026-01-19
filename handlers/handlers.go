@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"regexp"
 
 	"llamamanager/manager"
 	"llamamanager/models"
@@ -11,15 +13,41 @@ import (
 	"github.com/gorilla/mux"
 )
 
+const (
+	apiKeyHeader = "api-key"
+	envAPIKey    = "LLM_MANAGER_API_KEY"
+)
+
 type Handler struct {
-	manager *manager.ServerManager
-	logger  func(format string, args ...interface{})
+	manager  *manager.ServerManager
+	logger   func(format string, args ...interface{})
+	apiKey   string
+	enabled  bool
 }
 
+// validAPIKeyPattern matches exactly 16 alphanumeric characters
+var validAPIKeyPattern = regexp.MustCompile(`^[a-zA-Z0-9]{16}$`)
+
 func New(mgr *manager.ServerManager, logger func(format string, args ...interface{})) *Handler {
+	apiKey := os.Getenv(envAPIKey)
+	var enabled bool
+	if apiKey != "" {
+		if !validAPIKeyPattern.MatchString(apiKey) {
+			logger("WARNING: LLM_MANAGER_API_KEY must be exactly 16 alphanumeric characters, authentication disabled")
+			enabled = false
+		} else {
+			enabled = true
+			logger("API key authentication enabled")
+		}
+	} else {
+		logger("API key authentication disabled (environment variable not set)")
+	}
+
 	return &Handler{
 		manager: mgr,
 		logger:  logger,
+		apiKey:  apiKey,
+		enabled: enabled,
 	}
 }
 
@@ -153,10 +181,38 @@ func (h *Handler) CORS(next http.Handler) http.Handler {
 		}
 
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, api-key")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (h *Handler) RequireAPIKey(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !h.enabled {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		providedKey := r.Header.Get(apiKeyHeader)
+		if providedKey == "" {
+			h.sendJSON(w, http.StatusUnauthorized, models.APIResponse{
+				Success: false,
+				Message: "api-key header is required",
+			})
+			return
+		}
+
+		if providedKey != h.apiKey {
+			h.sendJSON(w, http.StatusUnauthorized, models.APIResponse{
+				Success: false,
+				Message: "invalid api key",
+			})
 			return
 		}
 

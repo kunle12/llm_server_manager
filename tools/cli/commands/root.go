@@ -5,12 +5,20 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"time"
 
 	"github.com/spf13/cobra"
 )
 
-const timeout = 30 * time.Second
+const (
+	timeout    = 30 * time.Second
+	envAPIKey  = "LLM_MANAGER_API_KEY"
+	apiKeyFlag = "api-key"
+)
+
+// validAPIKeyPattern matches exactly 16 alphanumeric characters
+var validAPIKeyPattern = regexp.MustCompile(`^[a-zA-Z0-9]{16}$`)
 
 type RootCommand struct {
 	Cmd        *cobra.Command
@@ -67,7 +75,7 @@ func (r *RootCommand) GetServerURL() string {
 		return server
 	}
 	// Fall back to environment variable or default
-	server := os.Getenv("LLM_MANAGER_URL")
+	server := os.Getenv("LLAMA_SERVER_URL")
 	if server == "" {
 		server = "http://localhost:8080"
 	}
@@ -96,6 +104,12 @@ func (r *RootCommand) DoRequest(method, path string, body interface{}) (*http.Re
 	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Add API key header if environment variable is set and valid
+	apiKey := os.Getenv(envAPIKey)
+	if apiKey != "" && validAPIKeyPattern.MatchString(apiKey) {
+		req.Header.Set(apiKeyFlag, apiKey)
 	}
 
 	resp, err := r.HTTPClient.Do(req)

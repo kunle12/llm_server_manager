@@ -133,6 +133,7 @@ func (a *App) setupRouter() {
 	r.Use(a.handler.CORS)
 
 	api := r.PathPrefix("/api/v1").Subrouter()
+	api.Use(a.handler.RequireAPIKey)
 	api.HandleFunc("/models", a.handler.ListModels).Methods("GET")
 	api.HandleFunc("/models/{model}/start", a.handler.StartModel).Methods("POST")
 	api.HandleFunc("/models/{model}/stop", a.handler.StopModel).Methods("DELETE")
