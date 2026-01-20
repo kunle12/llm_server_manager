@@ -1,6 +1,15 @@
-# LLM Server Manager
+# LlamaCPP Model Service Manager
 
-A professional Go application for managing multiple llama.cpp server instances with a REST API.
+This service manages operation of a llama.cpp server, `llama-server`, to provide opensource Large Language Model (LLM)s via a REST API. It allows starting and stopping of multiple LLM models defined in a configuration file, running each model in its own `llama-server` process instance.
+
+## Movivation
+
+Llama.cpp is a popular open-source LLM inference engine for running LLMs locally. As most of current LLMs have parameters in the billions, they require significant system resources, specially in terms of GPU VRAM or Unified Memory (RAM + Swap). Running multiple models simultaneously on a single machine can be challenging. A machine like Mac Studio with 127G Unified memory can barely run a 3bit quantised Qwen 235B-A22B Instruct model. Running multiple models will require swapping models on the system[1]. This service allows users to easily start and stop different LLM models on demand via a REST API, managing the underlying `llama-server` processes safely.
+
+(The real purpose)
+This service is built as an experimental PoC to prove to myself that opensource LLM, in this case MiniMax M2.1, plus code agent such as Claud Code can be used to build useful applications in a cost effective manner without relying on expensive API services from OpenAI, Anthropic, etc. This project is not intended for production use, 99.9% of the code is *vibe coded*, use at your own risk.
+
+[1] Llama.cpp will support dynamic model loading in future releases.
 
 ## Features
 
