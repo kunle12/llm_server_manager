@@ -156,10 +156,11 @@ func (sm *ServerManager) buildCommand(config *models.ModelConfig) *exec.Cmd {
 	}
 
 	args := []string{
+		"-a", config.Name,
 		"-m", config.ModelPath,
 		"-c", fmt.Sprintf("%d", config.ContextSize),
-		"--temp", fmt.Sprintf("%f", config.Temperature),
 		"-t", fmt.Sprintf("%d", config.Threads),
+		"--temp", fmt.Sprintf("%f", config.Temperature),
 		"--no-webui",
 		"--host", "0.0.0.0",
 		"--port", fmt.Sprintf("%d", port),
@@ -175,6 +176,12 @@ func (sm *ServerManager) buildCommand(config *models.ModelConfig) *exec.Cmd {
 		} else {
 			args = append(args, "--mmproj", *config.Mmproj)
 		}
+	}
+	if config.TopK != nil && *config.TopK > 0 {
+		args = append(args, "--top-k", fmt.Sprintf("%d", *config.TopK))
+	}
+	if config.TopP != nil && *config.TopP > 0.0 && *config.TopP <= 1.0 {
+		args = append(args, "--top-p", fmt.Sprintf("%f", *config.TopP))
 	}
 
 	cmd := exec.Command(sm.llamaPath, args...)

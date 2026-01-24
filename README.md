@@ -76,15 +76,17 @@ Create a `config.json` file based on `config.json.example`:
 
 ### Configuration Fields
 
-| Field        | Type    | Description                          |
-|-------------|---------|--------------------------------------|
-| name        | string  | Unique identifier for the model      |
-| model_path  | string  | Path to the GGUF model file          |
-| context_size| int     | Maximum context window size          |
-| temperature | float64 | Sampling temperature (0.0-2.0)       |
-| threads     | int     | Number of CPU threads to use         |
-| port        | int     | Port for llama.cpp server to listen  |
-| mmproj      | string  | Path to mmproj file (optional)       |
+| Field        | Type     | Description                          |
+|-------------|----------|--------------------------------------|
+| name        | string   | Unique identifier for the model      |
+| model_path  | string   | Path to the GGUF model file          |
+| context_size| int      | Maximum context window size          |
+| temperature | float64  | Sampling temperature (0.0-2.0)       |
+| threads     | int      | Number of CPU threads to use         |
+| port        | int      | Port for llama.cpp server to listen  |
+| mmproj      | string   | Path to mmproj file (optional)       |
+| top_k       | int      | Top-K sampling threshold (optional)  |
+| top_p       | float64  | Top-P sampling threshold 0.0-1.0 (optional) |
 
 ### Auto-Reload Configurations
 
