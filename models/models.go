@@ -3,15 +3,16 @@ package models
 import "time"
 
 type ModelConfig struct {
-	Name        string   `json:"name" mapstructure:"name"`
-	ModelPath   string   `json:"model_path" mapstructure:"model_path"`
-	ContextSize int      `json:"context_size" mapstructure:"context_size"`
-	Temperature float64  `json:"temperature" mapstructure:"temperature"`
-	TopK        *int     `json:"top_k,omitempty" mapstructure:"top_k,omitempty"`
-	TopP        *float64 `json:"top_p,omitempty" mapstructure:"top_p,omitempty"`
-	Threads     int      `json:"threads" mapstructure:"threads"`
-	Port        *int     `json:"port,omitempty" mapstructure:"port,omitempty"`
-	Mmproj      *string  `json:"mmproj,omitempty" mapstructure:"mmproj,omitempty"`
+	Name               string   `json:"name" mapstructure:"name"`
+	ModelPath          string   `json:"model_path" mapstructure:"model_path"`
+	ContextSize        int      `json:"context_size" mapstructure:"context_size"`
+	Temperature        float64  `json:"temperature" mapstructure:"temperature"`
+	TopK               *int     `json:"top_k,omitempty" mapstructure:"top_k,omitempty"`
+	TopP               *float64 `json:"top_p,omitempty" mapstructure:"top_p,omitempty"`
+	Threads            int      `json:"threads" mapstructure:"threads"`
+	Port               *int     `json:"port,omitempty" mapstructure:"port,omitempty"`
+	Mmproj             *string  `json:"mmproj,omitempty" mapstructure:"mmproj,omitempty"`
+	ChatTemplateKwargs *string  `json:"chat_template_kwargs,omitempty" mapstructure:"chat_template_kwargs,omitempty"`
 }
 
 type ServerStatus string

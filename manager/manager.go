@@ -184,6 +184,10 @@ func (sm *ServerManager) buildCommand(config *models.ModelConfig) *exec.Cmd {
 		args = append(args, "--top-p", fmt.Sprintf("%f", *config.TopP))
 	}
 
+	if config.ChatTemplateKwargs != nil && *config.ChatTemplateKwargs != "" {
+		args = append(args, "--chat-template-kwargs", *config.ChatTemplateKwargs)
+	}
+
 	cmd := exec.Command(sm.llamaPath, args...)
 	return cmd
 }
