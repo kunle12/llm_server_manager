@@ -188,6 +188,10 @@ func (sm *ServerManager) buildCommand(config *models.ModelConfig) *exec.Cmd {
 		args = append(args, "--chat-template-kwargs", *config.ChatTemplateKwargs)
 	}
 
+	if config.Ngl != nil && *config.Ngl > 0 {
+		args = append(args, "-ngl", fmt.Sprintf("%d", *config.Ngl))
+	}
+
 	cmd := exec.Command(sm.llamaPath, args...)
 	return cmd
 }

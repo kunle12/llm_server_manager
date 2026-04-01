@@ -13,6 +13,7 @@ type ModelConfig struct {
 	Port               *int     `json:"port,omitempty" mapstructure:"port,omitempty"`
 	Mmproj             *string  `json:"mmproj,omitempty" mapstructure:"mmproj,omitempty"`
 	ChatTemplateKwargs *string  `json:"chat_template_kwargs,omitempty" mapstructure:"chat_template_kwargs,omitempty"`
+	Ngl                *int     `json:"ngl,omitempty" mapstructure:"ngl,omitempty"`
 }
 
 type ServerStatus string
