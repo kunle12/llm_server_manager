@@ -68,7 +68,8 @@ Create a `config.json` file based on `config.json.example`:
       "context_size": 4096,
       "temperature": 0.7,
       "threads": 8,
-      "port": 8081
+      "port": 8081,
+      "ngl": 32
     }
   ]
 }
@@ -84,6 +85,7 @@ Create a `config.json` file based on `config.json.example`:
 | temperature | float64  | Sampling temperature (0.0-2.0)       |
 | threads     | int      | Number of CPU threads to use         |
 | port        | int      | Port for llama.cpp server to listen  |
+| ngl         | int      | Number of GPU layers (optional)      |
 | mmproj      | string   | Path to mmproj file (optional)       |
 | top_k       | int      | Top-K sampling threshold (optional)  |
 | top_p       | float64  | Top-P sampling threshold 0.0-1.0 (optional) |

@@ -191,7 +191,8 @@ The `manager` package handles llama.cpp process lifecycle:
       "context_size": 4096,
       "temperature": 0.7,
       "threads": 8,
-      "port": 8081
+      "port": 8081,
+      "ngl": 32
     }
   ]
 }
@@ -204,6 +205,7 @@ The `manager` package handles llama.cpp process lifecycle:
 - `temperature`: Sampling temperature (0.0-2.0)
 - `threads`: CPU threads to use
 - `port`: Server listen port (optional, defaults to 8081)
+- `ngl`: Number of GPU layers (optional, positive integer)
 
 ### 4. Application Lifecycle (server/server.go)
 
@@ -268,7 +270,7 @@ The manager builds this command structure (manager/manager.go:152-182):
 ```bash
 llama-server -m <model_path> -c <context_size> --temp <temperature> -t <threads> --no-webui --host 0.0.0.0 --port <port>
 ```
-With optional flags: `--log-disable` (when logging disabled), `--mmproj <path>` (if configured).
+With optional flags: `--log-disable` (when logging disabled), `--mmproj <path>` (if configured), `-ngl <layers>` (if configured).
 
 Override the binary path with `LLAMA_SERVER_PATH` environment variable.
 
