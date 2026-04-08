@@ -14,6 +14,7 @@ type ModelConfig struct {
 	Mmproj             *string  `json:"mmproj,omitempty" mapstructure:"mmproj,omitempty"`
 	ChatTemplateKwargs *string  `json:"chat_template_kwargs,omitempty" mapstructure:"chat_template_kwargs,omitempty"`
 	Ngl                *int     `json:"ngl,omitempty" mapstructure:"ngl,omitempty"`
+	Mmap               *bool    `json:"mmap,omitempty" mapstructure:"mmap,omitempty"`
 }
 
 type ServerStatus string

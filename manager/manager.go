@@ -192,6 +192,10 @@ func (sm *ServerManager) buildCommand(config *models.ModelConfig) *exec.Cmd {
 		args = append(args, "-ngl", fmt.Sprintf("%d", *config.Ngl))
 	}
 
+	if config.Mmap != nil && !*config.Mmap {
+		args = append(args, "--no-mmap")
+	}
+
 	cmd := exec.Command(sm.llamaPath, args...)
 	return cmd
 }
