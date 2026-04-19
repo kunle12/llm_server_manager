@@ -13,28 +13,35 @@ import (
 )
 
 type ServerManager struct {
-	configs       map[string]*models.ModelConfig
-	server        *models.RunningServer
-	mutex         sync.RWMutex
-	logger        func(format string, args ...interface{})
-	llamaPath     string
-	enableLogging bool
-	// Channel to signal goroutine to stop
-	stopChan chan struct{}
+	configs        map[string]*models.ModelConfig
+	server         *models.RunningServer
+	mutex          sync.RWMutex
+	logger         func(format string, args ...interface{})
+	llamaPath      string
+	enableLogging  bool
+	maxRetries     int
+	stopChan       chan struct{}
+	serverStopChan chan chan struct{}
 }
 
-func New(configs map[string]*models.ModelConfig, logger func(format string, args ...interface{}), enableLogging bool) (*ServerManager, error) {
+func New(configs map[string]*models.ModelConfig, logger func(format string, args ...interface{}), enableLogging bool, maxRetries int) (*ServerManager, error) {
 	llamaPath := getLlamaServerPath()
 	if err := validateLlamaServerPath(llamaPath); err != nil {
 		return nil, err
 	}
 
+	if maxRetries < 0 {
+		maxRetries = 0
+	}
+
 	return &ServerManager{
-		configs:       configs,
-		logger:        logger,
-		llamaPath:     llamaPath,
-		enableLogging: enableLogging,
-		stopChan:      make(chan struct{}),
+		configs:        configs,
+		logger:         logger,
+		llamaPath:      llamaPath,
+		enableLogging:  enableLogging,
+		maxRetries:     maxRetries,
+		stopChan:       make(chan struct{}),
+		serverStopChan: make(chan chan struct{}),
 	}, nil
 }
 
@@ -71,66 +78,112 @@ func (sm *ServerManager) StartModel(modelName string) error {
 		ModelConfig: *config,
 		Status:      models.StatusStarting,
 		StartTime:   time.Now(),
+		CrashCount:  0,
 	}
 
+	stopChan := make(chan struct{})
+	sm.serverStopChan <- stopChan
+
 	done := make(chan struct{})
-	go sm.launchServer(config, done)
+	go sm.launchServer(config, done, stopChan)
 
 	return nil
 }
 
-func (sm *ServerManager) launchServer(config *models.ModelConfig, done chan struct{}) {
-	// Update status to starting
+func (sm *ServerManager) launchServer(config *models.ModelConfig, done chan struct{}, stopChan chan struct{}) {
 	sm.mutex.Lock()
 	sm.server.Status = models.StatusStarting
 	sm.mutex.Unlock()
 
 	sm.logger("Starting llama.cpp server for model: %s", config.Name)
 
-	cmd := sm.buildCommand(config)
+	crashCount := 0
 
-	if sm.enableLogging {
-		logFile, err := sm.createLogFile(config.Name)
-		if err != nil {
-			sm.logger("Warning: failed to create log file: %v", err)
+	for {
+		cmd := sm.buildCommand(config)
+
+		if sm.enableLogging {
+			logFile, err := sm.createLogFile(config.Name)
+			if err != nil {
+				sm.logger("Warning: failed to create log file: %v", err)
+			} else {
+				cmd.Stdout = logFile
+				cmd.Stderr = logFile
+			}
 		} else {
-			cmd.Stdout = logFile
-			cmd.Stderr = logFile
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
 		}
-	} else {
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-	}
 
-	if err := cmd.Start(); err != nil {
-		sm.logger("Failed to start server: %v", err)
-		sm.clearServerState()
+		if err := cmd.Start(); err != nil {
+			sm.logger("Failed to start server: %v", err)
+			sm.clearServerState()
+			close(done)
+			return
+		}
+
+		pid := cmd.Process.Pid
+		sm.logger("Server started successfully with PID: %d", pid)
+
+		sm.mutex.Lock()
+		if sm.server != nil {
+			sm.server.PID = pid
+			sm.server.Status = models.StatusRunning
+			sm.server.CrashCount = crashCount
+		}
+		sm.mutex.Unlock()
 		close(done)
+
+		waitErr := cmd.Wait()
+		pidCopy := pid
+
+		select {
+		case <-stopChan:
+			sm.logger("Server stopped for model: %s", config.Name)
+			sm.clearServerStateIfPIDMatches(pidCopy)
+			return
+		default:
+		}
+
+		if waitErr != nil {
+			exitCode := -1
+			if cmd.ProcessState != nil {
+				exitCode = cmd.ProcessState.ExitCode()
+			}
+
+			crashCount++
+			if sm.maxRetries > 0 && crashCount <= sm.maxRetries {
+				delay := time.Duration(crashCount) * time.Second
+				if delay > 10*time.Second {
+					delay = 10 * time.Second
+				}
+				sm.logger("Server crashed (exit code %d), restarting in %v (attempt %d/%d)",
+					exitCode, delay, crashCount, sm.maxRetries)
+
+				sm.mutex.Lock()
+				if sm.server != nil {
+					sm.server.Status = models.StatusStarting
+				}
+				sm.mutex.Unlock()
+
+				time.Sleep(delay)
+				done = make(chan struct{})
+				continue
+			}
+
+			if crashCount > sm.maxRetries && sm.maxRetries > 0 {
+				sm.logger("Server crashed (exit code %d), max restart attempts (%d) reached",
+					exitCode, sm.maxRetries)
+			} else {
+				sm.logger("Server process exited with error: %v", waitErr)
+			}
+		} else {
+			sm.logger("Server process exited cleanly")
+		}
+
+		sm.clearServerStateIfPIDMatches(pidCopy)
 		return
 	}
-
-	pid := cmd.Process.Pid
-	sm.logger("Server started successfully with PID: %d", pid)
-
-	// Update PID and status atomically
-	sm.mutex.Lock()
-	if sm.server != nil {
-		sm.server.PID = pid
-		sm.server.Status = models.StatusRunning
-	}
-	sm.mutex.Unlock()
-	close(done)
-
-	// Wait for process to complete
-	err := cmd.Wait()
-	if err != nil {
-		sm.logger("Server process exited with error: %v", err)
-	}
-
-	// Clear server state if this is still the active server
-	sm.clearServerStateIfPIDMatches(pid)
-
-	sm.logger("Server stopped for model: %s", config.Name)
 }
 
 // clearServerStateIfPIDMatches clears server state if PID matches
@@ -257,7 +310,12 @@ func (sm *ServerManager) StopCurrent() error {
 
 	sm.mutex.Unlock()
 
-	// Kill the process
+	select {
+	case stopChan := <-sm.serverStopChan:
+		close(stopChan)
+	default:
+	}
+
 	p, err := os.FindProcess(pid)
 	if err != nil {
 		return fmt.Errorf("failed to find process: %w", err)
@@ -269,7 +327,6 @@ func (sm *ServerManager) StopCurrent() error {
 
 	sm.logger("Server process killed for PID: %d", pid)
 
-	// Clear server state
 	sm.clearServerStateIfPIDMatches(pid)
 
 	return nil

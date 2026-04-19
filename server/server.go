@@ -72,7 +72,7 @@ func maxBytesReader(maxBytes int64) func(http.Handler) http.Handler {
 	}
 }
 
-func New(configPath string, enableLogging bool) (*App, error) {
+func New(configPath string, enableLogging bool, maxRetries int) (*App, error) {
 	logger := func(format string, args ...interface{}) {
 		log.Printf("[LLM Manager] "+format, args...)
 	}
@@ -87,7 +87,7 @@ func New(configPath string, enableLogging bool) (*App, error) {
 		modelMap[cfg.Models[i].Name] = &cfg.Models[i]
 	}
 
-	mgr, err := manager.New(modelMap, logger, enableLogging)
+	mgr, err := manager.New(modelMap, logger, enableLogging, maxRetries)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create server manager: %w", err)
 	}

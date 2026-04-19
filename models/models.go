@@ -31,6 +31,7 @@ type RunningServer struct {
 	PID         int          `json:"pid"`
 	Status      ServerStatus `json:"status"`
 	StartTime   time.Time    `json:"start_time"`
+	CrashCount  int          `json:"crash_count"`
 }
 
 type APIResponse struct {

@@ -14,21 +14,28 @@ func main() {
 	var listenAddr string
 	var enableLogging bool
 	var daemonMode bool
+	var maxRetries int
 
 	flag.StringVar(&configPath, "config", "llm_config.json", "path to configuration file")
 	flag.StringVar(&listenAddr, "listen", ":8080", "address to listen on")
 	flag.BoolVar(&enableLogging, "log", false, "enable logging llama-server output to /tmp/llama-server-{model}-{timestamp}.log")
 	flag.BoolVar(&daemonMode, "daemon", false, "run in daemon mode (background)")
+	flag.IntVar(&maxRetries, "retries", 6, "max automatic restarts on crash (0 to disable)")
 	flag.Parse()
 
-	if err := validateConfigPath(configPath); err != nil {
+	if maxRetries < 0 {
+		fmt.Fprintf(os.Stderr, "Configuration error: -retries must be >= 0\n")
+		os.Exit(1)
+	}
+
+	if err := validateConfigPath(configPath, maxRetries); err != nil {
 		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
 		os.Exit(1)
 	}
 
 	// If daemon mode is enabled, fork and run in background
 	if daemonMode {
-		if err := runDaemon(configPath, enableLogging, listenAddr); err != nil {
+		if err := runDaemon(configPath, enableLogging, listenAddr, maxRetries); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to start daemon: %v\n", err)
 			os.Exit(1)
 		}
@@ -37,7 +44,7 @@ func main() {
 	}
 
 	// Normal foreground mode
-	app, err := server.New(configPath, enableLogging)
+	app, err := server.New(configPath, enableLogging, maxRetries)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create application: %v\n", err)
 		os.Exit(1)
@@ -50,7 +57,7 @@ func main() {
 }
 
 // runDaemon implements daemonization by re-executing the binary
-func runDaemon(configPath string, enableLogging bool, listenAddr string) error {
+func runDaemon(configPath string, enableLogging bool, listenAddr string, maxRetries int) error {
 	// Get the current executable path
 	execPath, err := os.Executable()
 	if err != nil {
@@ -96,12 +103,12 @@ func runDaemon(configPath string, enableLogging bool, listenAddr string) error {
 	return nil
 }
 
-func validateConfigPath(configPath string) error {
+func validateConfigPath(configPath string, maxRetries int) error {
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		return fmt.Errorf("configuration file '%s' does not exist", configPath)
 	}
 
-	app, err := server.New(configPath, false)
+	app, err := server.New(configPath, false, maxRetries)
 	if err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
