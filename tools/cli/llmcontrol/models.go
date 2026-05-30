@@ -11,6 +11,7 @@ type ModelConfig struct {
 	Port        *int    `json:"port,omitempty" mapstructure:"port,omitempty"`
 	Mmproj      *string `json:"mmproj,omitempty" mapstructure:"mmproj,omitempty"`
 	SpecDraftNMax *int  `json:"spec-draft-n-max,omitempty" mapstructure:"spec-draft-n-max,omitempty"`
+	LaunchCmd     *string `json:"launch_cmd,omitempty" mapstructure:"launch_cmd,omitempty"`
 }
 
 type ServerStatus string

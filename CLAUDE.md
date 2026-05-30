@@ -195,6 +195,10 @@ The `manager` package handles llama.cpp process lifecycle:
       "ngl": 32,
       "mmap": false,
       "spec-draft-n-max": 10
+    },
+    {
+      "name": "custom-model",
+      "launch_cmd": "llama-server -m /path/to/model.gguf -c 4096 --host 0.0.0.0 --port 8082"
     }
   ]
 }
@@ -210,6 +214,7 @@ The `manager` package handles llama.cpp process lifecycle:
 - `ngl`: Number of GPU layers (optional, positive integer)
 - `mmap`: Disable memory mapping (optional, adds `--no-mmap` flag when set to false)
 - `spec-draft-n-max`: Speculative decoding draft n max (optional, adds `--spec-type draft-mtp --spec-draft-n-max` when set)
+- `launch_cmd`: Raw CLI command to launch the model (optional, when set all other settings are ignored, command is executed via `bash -c`)
 
 ### 4. Application Lifecycle (server/server.go)
 

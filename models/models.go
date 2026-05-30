@@ -16,6 +16,7 @@ type ModelConfig struct {
 	Ngl                *int     `json:"ngl,omitempty" mapstructure:"ngl,omitempty"`
 	Mmap               *bool    `json:"mmap,omitempty" mapstructure:"mmap,omitempty"`
 	SpecDraftNMax      *int     `json:"spec-draft-n-max,omitempty" mapstructure:"spec-draft-n-max,omitempty"`
+	LaunchCmd          *string  `json:"launch_cmd,omitempty" mapstructure:"launch_cmd,omitempty"`
 }
 
 type ServerStatus string

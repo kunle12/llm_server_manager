@@ -1,0 +1,26 @@
+{
+  "models": [
+    {
+      "name": "GLM-4.6V-Flash",
+      "model_path": "/Users/xun/mlmodels/GLM-4.6V-Flash-Q5_K_M.gguf",
+      "context_size": 4096,
+      "temperature": 0.6,
+      "threads": 8
+    },
+    {
+      "name": "MiniCPM-V-4.5",
+      "model_path": "/Users/xun/mlmodels/MiniCPM-V-4_5-Q6_K.gguf",
+      "mmproj": "/Users/xun/mlmodels/MiniCPM-V-4_5-mmproj-f16.gguf",
+      "context_size": 4096,
+      "temperature": 0.6,
+      "threads": 8
+    },
+    {
+      "name": "Test-Model-Reloaded",
+      "model_path": "/Users/xun/mlmodels/test-model.gguf",
+      "context_size": 2048,
+      "temperature": 1.0,
+      "threads": 5
+    }
+  ]
+}

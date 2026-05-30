@@ -71,8 +71,10 @@ func (sm *ServerManager) StartModel(modelName string) error {
 		return fmt.Errorf("model '%s' not found in configuration", modelName)
 	}
 
-	if err := validateModelFile(config.ModelPath); err != nil {
-		return fmt.Errorf("model file validation failed: %w", err)
+	if config.LaunchCmd == nil || *config.LaunchCmd == "" {
+		if err := validateModelFile(config.ModelPath); err != nil {
+			return fmt.Errorf("model file validation failed: %w", err)
+		}
 	}
 
 	sm.server = &models.RunningServer{
@@ -95,6 +97,12 @@ func (sm *ServerManager) launchServer(config *models.ModelConfig, done chan stru
 	sm.mutex.Lock()
 	sm.server.Status = models.StatusStarting
 	sm.mutex.Unlock()
+
+	if config.LaunchCmd != nil && *config.LaunchCmd != "" {
+		sm.logger("Starting custom command for model: %s", config.Name)
+		sm.launchCustomCommand(config, done, stopChan)
+		return
+	}
 
 	sm.logger("Starting llama.cpp server for model: %s", config.Name)
 
@@ -264,6 +272,96 @@ func (sm *ServerManager) buildCommand(config *models.ModelConfig) *exec.Cmd {
 
 	cmd := exec.Command(sm.llamaPath, args...)
 	return cmd
+}
+
+func (sm *ServerManager) launchCustomCommand(config *models.ModelConfig, done chan struct{}, stopChan chan struct{}) {
+	crashCount := 0
+
+	for {
+		cmd := exec.Command("bash", "-c", *config.LaunchCmd)
+
+		if sm.enableLogging {
+			logFile, err := sm.createLogFile(config.Name)
+			if err != nil {
+				sm.logger("Warning: failed to create log file: %v", err)
+			} else {
+				cmd.Stdout = logFile
+				cmd.Stderr = logFile
+			}
+		} else {
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+		}
+
+		if err := cmd.Start(); err != nil {
+			sm.logger("Failed to start custom command: %v", err)
+			sm.clearServerState()
+			close(done)
+			return
+		}
+
+		pid := cmd.Process.Pid
+		sm.logger("Custom command started successfully with PID: %d", pid)
+
+		sm.mutex.Lock()
+		if sm.server != nil {
+			sm.server.PID = pid
+			sm.server.Status = models.StatusRunning
+			sm.server.CrashCount = crashCount
+		}
+		sm.mutex.Unlock()
+		close(done)
+
+		waitErr := cmd.Wait()
+		pidCopy := pid
+
+		select {
+		case <-stopChan:
+			sm.logger("Custom command stopped for model: %s", config.Name)
+			sm.clearServerStateIfPIDMatches(pidCopy)
+			return
+		default:
+		}
+
+		if waitErr != nil {
+			exitCode := -1
+			if cmd.ProcessState != nil {
+				exitCode = cmd.ProcessState.ExitCode()
+			}
+
+			crashCount++
+			if sm.maxRetries > 0 && crashCount <= sm.maxRetries {
+				delay := time.Duration(crashCount) * time.Second
+				if delay > 10*time.Second {
+					delay = 10 * time.Second
+				}
+				sm.logger("Custom command crashed (exit code %d), restarting in %v (attempt %d/%d)",
+					exitCode, delay, crashCount, sm.maxRetries)
+
+				sm.mutex.Lock()
+				if sm.server != nil {
+					sm.server.Status = models.StatusStarting
+				}
+				sm.mutex.Unlock()
+
+				time.Sleep(delay)
+				done = make(chan struct{})
+				continue
+			}
+
+			if crashCount > sm.maxRetries && sm.maxRetries > 0 {
+				sm.logger("Custom command crashed (exit code %d), max restart attempts (%d) reached",
+					exitCode, sm.maxRetries)
+			} else {
+				sm.logger("Custom command process exited with error: %v", waitErr)
+			}
+		} else {
+			sm.logger("Custom command process exited cleanly")
+		}
+
+		sm.clearServerStateIfPIDMatches(pidCopy)
+		return
+	}
 }
 
 func getLlamaServerPath() string {

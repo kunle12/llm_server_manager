@@ -93,6 +93,7 @@ Create a `config.json` file based on `config.json.example`:
 | mmap             | bool     | Disable memory mapping (optional, adds --no-mmap)|
 | spec-draft-n-max | int      | Speculative decoding draft n max (optional)      |
 | chat_template_kwargs | string | Chat template kwargs (optional)              |
+| launch_cmd       | string   | Raw CLI command to launch (optional, ignores other settings) |
 
 ### Auto-Reload Configurations
 

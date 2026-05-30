@@ -24,6 +24,10 @@
       "temperature": 0.5,
       "threads": 4,
       "port": 8083
+    },
+    {
+      "name": "custom-launch",
+      "launch_cmd": "llama-server -m /path/to/model.gguf -c 4096 --host 0.0.0.0 --port 8084"
     }
   ]
 }
