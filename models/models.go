@@ -6,10 +6,10 @@ type ModelConfig struct {
 	Name               string   `json:"name" mapstructure:"name"`
 	ModelPath          string   `json:"model_path" mapstructure:"model_path"`
 	ContextSize        *int     `json:"context_size,omitempty" mapstructure:"context_size,omitempty"`
-	Temperature        float64  `json:"temperature" mapstructure:"temperature"`
+	Temperature        float64  `json:"temperature,omitempty" mapstructure:"temperature,omitempty"`
 	TopK               *int     `json:"top_k,omitempty" mapstructure:"top_k,omitempty"`
 	TopP               *float64 `json:"top_p,omitempty" mapstructure:"top_p,omitempty"`
-	Threads            int      `json:"threads" mapstructure:"threads"`
+	Threads            int      `json:"threads,omitempty" mapstructure:"threads,omitempty"`
 	Port               *int     `json:"port,omitempty" mapstructure:"port,omitempty"`
 	Mmproj             *string  `json:"mmproj,omitempty" mapstructure:"mmproj,omitempty"`
 	ChatTemplateKwargs *string  `json:"chat_template_kwargs,omitempty" mapstructure:"chat_template_kwargs,omitempty"`

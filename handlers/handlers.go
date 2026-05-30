@@ -77,9 +77,24 @@ func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
 
 	var modelList []models.ModelItem
 	for _, config := range modelMap {
+		cfg := *config
+		if cfg.LaunchCmd != nil && *cfg.LaunchCmd != "" {
+			cfg.ModelPath = "use launch cmd"
+			cfg.Temperature = 0
+			cfg.Threads = 0
+			cfg.ContextSize = nil
+			cfg.TopK = nil
+			cfg.TopP = nil
+			cfg.Port = nil
+			cfg.Mmproj = nil
+			cfg.ChatTemplateKwargs = nil
+			cfg.Ngl = nil
+			cfg.Mmap = nil
+			cfg.SpecDraftNMax = nil
+		}
 		active := current != nil && current.ModelConfig.Name == config.Name && current.Status == models.StatusRunning
 		modelList = append(modelList, models.ModelItem{
-			ModelConfig: *config,
+			ModelConfig: cfg,
 			Active:      active,
 		})
 	}

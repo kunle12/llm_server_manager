@@ -74,15 +74,28 @@ func (c *ListCommand) run(cmd *cobra.Command, args []string) error {
 		for _, m := range modelsData {
 			model := m.(map[string]interface{})
 			activeStr := "false"
-			if model["active"].(bool) {
+			if active, ok := model["active"].(bool); ok && active {
 				activeStr = "true"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%d\t%.2f\t%d\t%s\n",
+			modelPath := fmt.Sprintf("%v", model["model_path"])
+			contextSize := "N/A"
+			if v, ok := model["context_size"].(float64); ok {
+				contextSize = fmt.Sprintf("%d", int(v))
+			}
+			temperature := "N/A"
+			if v, ok := model["temperature"].(float64); ok {
+				temperature = fmt.Sprintf("%.2f", v)
+			}
+			threads := "N/A"
+			if v, ok := model["threads"].(float64); ok {
+				threads = fmt.Sprintf("%d", int(v))
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 				model["name"],
-				model["model_path"],
-				int(model["context_size"].(float64)),
-				model["temperature"].(float64),
-				int(model["threads"].(float64)),
+				modelPath,
+				contextSize,
+				temperature,
+				threads,
 				activeStr)
 		}
 	}
