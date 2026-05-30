@@ -211,12 +211,15 @@ func (sm *ServerManager) buildCommand(config *models.ModelConfig) *exec.Cmd {
 	args := []string{
 		"-a", config.Name,
 		"-m", config.ModelPath,
-		"-c", fmt.Sprintf("%d", config.ContextSize),
 		"-t", fmt.Sprintf("%d", config.Threads),
 		"--temp", fmt.Sprintf("%f", config.Temperature),
 		"--no-webui",
 		"--host", "0.0.0.0",
 		"--port", fmt.Sprintf("%d", port),
+	}
+
+	if config.ContextSize != nil && *config.ContextSize > 0 {
+		args = append(args, "-c", fmt.Sprintf("%d", *config.ContextSize))
 	}
 
 	if !sm.enableLogging {
@@ -247,6 +250,11 @@ func (sm *ServerManager) buildCommand(config *models.ModelConfig) *exec.Cmd {
 
 	if config.Mmap != nil && !*config.Mmap {
 		args = append(args, "--no-mmap")
+	}
+
+	if config.SpecDraftNMax != nil && *config.SpecDraftNMax > 0 {
+		args = append(args, "--spec-type", "draft-mtp")
+		args = append(args, "--spec-draft-n-max", fmt.Sprintf("%d", *config.SpecDraftNMax))
 	}
 
 	cmd := exec.Command(sm.llamaPath, args...)

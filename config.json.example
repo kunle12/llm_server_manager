@@ -6,7 +6,8 @@
       "context_size": 4096,
       "temperature": 0.7,
       "threads": 8,
-      "port": 8081
+      "port": 8081,
+      "spec-draft-n-max": 10
     },
     {
       "name": "codellama-13b",
@@ -20,7 +21,6 @@
     {
       "name": "mistral-7b",
       "model_path": "/path/to/mistral-7b.gguf",
-      "context_size": 4096,
       "temperature": 0.5,
       "threads": 4,
       "port": 8083

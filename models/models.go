@@ -5,7 +5,7 @@ import "time"
 type ModelConfig struct {
 	Name               string   `json:"name" mapstructure:"name"`
 	ModelPath          string   `json:"model_path" mapstructure:"model_path"`
-	ContextSize        int      `json:"context_size" mapstructure:"context_size"`
+	ContextSize        *int     `json:"context_size,omitempty" mapstructure:"context_size,omitempty"`
 	Temperature        float64  `json:"temperature" mapstructure:"temperature"`
 	TopK               *int     `json:"top_k,omitempty" mapstructure:"top_k,omitempty"`
 	TopP               *float64 `json:"top_p,omitempty" mapstructure:"top_p,omitempty"`
@@ -15,6 +15,7 @@ type ModelConfig struct {
 	ChatTemplateKwargs *string  `json:"chat_template_kwargs,omitempty" mapstructure:"chat_template_kwargs,omitempty"`
 	Ngl                *int     `json:"ngl,omitempty" mapstructure:"ngl,omitempty"`
 	Mmap               *bool    `json:"mmap,omitempty" mapstructure:"mmap,omitempty"`
+	SpecDraftNMax      *int     `json:"spec-draft-n-max,omitempty" mapstructure:"spec-draft-n-max,omitempty"`
 }
 
 type ServerStatus string

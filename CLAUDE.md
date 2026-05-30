@@ -193,7 +193,8 @@ The `manager` package handles llama.cpp process lifecycle:
       "threads": 8,
       "port": 8081,
       "ngl": 32,
-      "mmap": false
+      "mmap": false,
+      "spec-draft-n-max": 10
     }
   ]
 }
@@ -202,12 +203,13 @@ The `manager` package handles llama.cpp process lifecycle:
 **ModelConfig Fields**:
 - `name`: Unique identifier
 - `model_path`: Path to GGUF model file
-- `context_size`: Maximum context window
+- `context_size`: Maximum context window (optional, omit to use llama.cpp default)
 - `temperature`: Sampling temperature (0.0-2.0)
 - `threads`: CPU threads to use
 - `port`: Server listen port (optional, defaults to 8081)
 - `ngl`: Number of GPU layers (optional, positive integer)
 - `mmap`: Disable memory mapping (optional, adds `--no-mmap` flag when set to false)
+- `spec-draft-n-max`: Speculative decoding draft n max (optional, adds `--spec-type draft-mtp --spec-draft-n-max` when set)
 
 ### 4. Application Lifecycle (server/server.go)
 
@@ -272,7 +274,9 @@ The manager builds this command structure (manager/manager.go:152-182):
 ```bash
 llama-server -m <model_path> -c <context_size> --temp <temperature> -t <threads> --no-webui --host 0.0.0.0 --port <port>
 ```
-With optional flags: `--log-disable` (when logging disabled), `--mmproj <path>` (if configured), `-ngl <layers>` (if configured), `--no-mmap` (if `mmap` is set to false).
+With optional flags: `--log-disable` (when logging disabled), `--mmproj <path>` (if configured), `-ngl <layers>` (if configured), `--no-mmap` (if `mmap` is set to false), `--spec-type draft-mtp --spec-draft-n-max <n>` (if `spec-draft-n-max` is set and positive).
+
+Note: `-c <context_size>` is only added when `context_size` is configured and positive.
 
 Override the binary path with `LLAMA_SERVER_PATH` environment variable.
 
