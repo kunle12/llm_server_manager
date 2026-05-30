@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"llamamanager/models"
@@ -54,8 +55,28 @@ func (sm *ServerManager) ListModels() map[string]*models.ModelConfig {
 
 func (sm *ServerManager) GetCurrentServer() *models.RunningServer {
 	sm.mutex.RLock()
-	defer sm.mutex.RUnlock()
-	return sm.server
+	server := sm.server
+	sm.mutex.RUnlock()
+
+	if server == nil {
+		return nil
+	}
+
+	if server.Status == models.StatusRunning && !isProcessAlive(server.PID) {
+		sm.mutex.Lock()
+		if sm.server != nil && sm.server.PID == server.PID {
+			sm.server = nil
+		}
+		sm.mutex.Unlock()
+		return nil
+	}
+
+	return server
+}
+
+func isProcessAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil
 }
 
 func (sm *ServerManager) StartModel(modelName string) error {
