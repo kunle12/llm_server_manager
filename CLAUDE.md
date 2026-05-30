@@ -274,7 +274,7 @@ The manager builds this command structure (manager/manager.go:152-182):
 ```bash
 llama-server -m <model_path> -c <context_size> --temp <temperature> -t <threads> --no-webui --host 0.0.0.0 --port <port>
 ```
-With optional flags: `--log-disable` (when logging disabled), `--mmproj <path>` (if configured), `-ngl <layers>` (if configured), `--no-mmap` (if `mmap` is set to false), `--spec-type draft-mtp --spec-draft-n-max <n>` (if `spec-draft-n-max` is set and positive).
+With optional flags: `--log-disable` (when logging disabled), `--mmproj <path>` (if configured), `-ngl <layers>` (if configured), `--no-mmap` (if `mmap` is set to false), `--spec-type draft-mtp --spec-draft-n-max <n>` (if `spec-draft-n-max` is set and positive), `--cache-ram 0` (only on macOS/Darwin).
 
 Note: `-c <context_size>` is only added when `context_size` is configured and positive.
 

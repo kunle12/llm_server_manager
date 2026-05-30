@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -255,6 +256,10 @@ func (sm *ServerManager) buildCommand(config *models.ModelConfig) *exec.Cmd {
 	if config.SpecDraftNMax != nil && *config.SpecDraftNMax > 0 {
 		args = append(args, "--spec-type", "draft-mtp")
 		args = append(args, "--spec-draft-n-max", fmt.Sprintf("%d", *config.SpecDraftNMax))
+	}
+
+	if runtime.GOOS == "darwin" {
+		args = append(args, "--cache-ram", "0")
 	}
 
 	cmd := exec.Command(sm.llamaPath, args...)
