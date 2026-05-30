@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,15 +16,17 @@ import (
 )
 
 type ServerManager struct {
-	configs        map[string]*models.ModelConfig
-	server         *models.RunningServer
-	mutex          sync.RWMutex
-	logger         func(format string, args ...interface{})
-	llamaPath      string
-	enableLogging  bool
-	maxRetries     int
-	stopChan       chan struct{}
-	serverStopChan chan chan struct{}
+	configs       map[string]*models.ModelConfig
+	server        *models.RunningServer
+	mutex         sync.RWMutex
+	logger        func(format string, args ...interface{})
+	llamaPath     string
+	enableLogging bool
+	maxRetries    int
+	stopChan      chan struct{}
+	cancelCtx     context.Context
+	cancelFunc    context.CancelFunc
+	logFile       *os.File
 }
 
 func New(configs map[string]*models.ModelConfig, logger func(format string, args ...interface{}), enableLogging bool, maxRetries int) (*ServerManager, error) {
@@ -36,14 +39,17 @@ func New(configs map[string]*models.ModelConfig, logger func(format string, args
 		maxRetries = 0
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	return &ServerManager{
-		configs:        configs,
-		logger:         logger,
-		llamaPath:      llamaPath,
-		enableLogging:  enableLogging,
-		maxRetries:     maxRetries,
-		stopChan:       make(chan struct{}),
-		serverStopChan: make(chan chan struct{}),
+		configs:       configs,
+		logger:        logger,
+		llamaPath:     llamaPath,
+		enableLogging: enableLogging,
+		maxRetries:    maxRetries,
+		stopChan:      make(chan struct{}),
+		cancelCtx:     ctx,
+		cancelFunc:    cancel,
 	}, nil
 }
 
@@ -54,20 +60,16 @@ func (sm *ServerManager) ListModels() map[string]*models.ModelConfig {
 }
 
 func (sm *ServerManager) GetCurrentServer() *models.RunningServer {
-	sm.mutex.RLock()
-	server := sm.server
-	sm.mutex.RUnlock()
+	sm.mutex.Lock()
+	defer sm.mutex.Unlock()
 
+	server := sm.server
 	if server == nil {
 		return nil
 	}
 
 	if server.Status == models.StatusRunning && !isProcessAlive(server.PID) {
-		sm.mutex.Lock()
-		if sm.server != nil && sm.server.PID == server.PID {
-			sm.server = nil
-		}
-		sm.mutex.Unlock()
+		sm.server = nil
 		return nil
 	}
 
@@ -92,11 +94,15 @@ func (sm *ServerManager) StartModel(modelName string) error {
 		return fmt.Errorf("model '%s' not found in configuration", modelName)
 	}
 
-	if config.LaunchCmd == nil || *config.LaunchCmd == "" {
-		if err := validateModelFile(config.ModelPath); err != nil {
-			return fmt.Errorf("model file validation failed: %w", err)
-		}
+	if err := validateModelConfig(config); err != nil {
+		return err
 	}
+
+	if sm.cancelFunc != nil {
+		sm.cancelFunc()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
 
 	sm.server = &models.RunningServer{
 		ModelConfig: *config,
@@ -105,23 +111,44 @@ func (sm *ServerManager) StartModel(modelName string) error {
 		CrashCount:  0,
 	}
 
-	stopChan := make(chan struct{})
-	sm.serverStopChan <- stopChan
-
-	done := make(chan struct{})
-	go sm.launchServer(config, done, stopChan)
+	go sm.launchServer(ctx, config, cancel)
 
 	return nil
 }
 
-func (sm *ServerManager) launchServer(config *models.ModelConfig, done chan struct{}, stopChan chan struct{}) {
+func validateModelConfig(config *models.ModelConfig) error {
+	if config.Name == "" {
+		return fmt.Errorf("model name cannot be empty")
+	}
+
+	if config.LaunchCmd == nil || *config.LaunchCmd == "" {
+		if config.ModelPath == "" {
+			return fmt.Errorf("model_path is required when launch_cmd is not set")
+		}
+		if err := validateModelFile(config.ModelPath); err != nil {
+			return fmt.Errorf("model file validation failed: %w", err)
+		}
+	}
+
+	if config.Threads <= 0 {
+		return fmt.Errorf("threads must be positive")
+	}
+
+	if config.Temperature < 0 || config.Temperature > 2 {
+		return fmt.Errorf("temperature must be between 0 and 2")
+	}
+
+	return nil
+}
+
+func (sm *ServerManager) launchServer(ctx context.Context, config *models.ModelConfig, cancelFunc context.CancelFunc) {
 	sm.mutex.Lock()
 	sm.server.Status = models.StatusStarting
 	sm.mutex.Unlock()
 
 	if config.LaunchCmd != nil && *config.LaunchCmd != "" {
 		sm.logger("Starting custom command for model: %s", config.Name)
-		sm.launchCustomCommand(config, done, stopChan)
+		sm.launchCustomCommand(ctx, config, cancelFunc)
 		return
 	}
 
@@ -130,13 +157,25 @@ func (sm *ServerManager) launchServer(config *models.ModelConfig, done chan stru
 	crashCount := 0
 
 	for {
+		select {
+		case <-ctx.Done():
+			sm.logger("Server context cancelled for model: %s", config.Name)
+			sm.clearServerState()
+			return
+		default:
+		}
+
 		cmd := sm.buildCommand(config)
 
 		if sm.enableLogging {
+			if sm.logFile != nil {
+				sm.logFile.Close()
+			}
 			logFile, err := sm.createLogFile(config.Name)
 			if err != nil {
 				sm.logger("Warning: failed to create log file: %v", err)
 			} else {
+				sm.logFile = logFile
 				cmd.Stdout = logFile
 				cmd.Stderr = logFile
 			}
@@ -148,7 +187,6 @@ func (sm *ServerManager) launchServer(config *models.ModelConfig, done chan stru
 		if err := cmd.Start(); err != nil {
 			sm.logger("Failed to start server: %v", err)
 			sm.clearServerState()
-			close(done)
 			return
 		}
 
@@ -162,14 +200,19 @@ func (sm *ServerManager) launchServer(config *models.ModelConfig, done chan stru
 			sm.server.CrashCount = crashCount
 		}
 		sm.mutex.Unlock()
-		close(done)
 
 		waitErr := cmd.Wait()
+
+		if sm.logFile != nil {
+			sm.logFile.Close()
+			sm.logFile = nil
+		}
+
 		pidCopy := pid
 
 		select {
-		case <-stopChan:
-			sm.logger("Server stopped for model: %s", config.Name)
+		case <-ctx.Done():
+			sm.logger("Server context cancelled for model: %s", config.Name)
 			sm.clearServerStateIfPIDMatches(pidCopy)
 			return
 		default:
@@ -197,7 +240,6 @@ func (sm *ServerManager) launchServer(config *models.ModelConfig, done chan stru
 				sm.mutex.Unlock()
 
 				time.Sleep(delay)
-				done = make(chan struct{})
 				continue
 			}
 
@@ -295,17 +337,29 @@ func (sm *ServerManager) buildCommand(config *models.ModelConfig) *exec.Cmd {
 	return cmd
 }
 
-func (sm *ServerManager) launchCustomCommand(config *models.ModelConfig, done chan struct{}, stopChan chan struct{}) {
+func (sm *ServerManager) launchCustomCommand(ctx context.Context, config *models.ModelConfig, cancelFunc context.CancelFunc) {
 	crashCount := 0
 
 	for {
+		select {
+		case <-ctx.Done():
+			sm.logger("Custom command context cancelled for model: %s", config.Name)
+			sm.clearServerState()
+			return
+		default:
+		}
+
 		cmd := exec.Command("bash", "-c", *config.LaunchCmd)
 
 		if sm.enableLogging {
+			if sm.logFile != nil {
+				sm.logFile.Close()
+			}
 			logFile, err := sm.createLogFile(config.Name)
 			if err != nil {
 				sm.logger("Warning: failed to create log file: %v", err)
 			} else {
+				sm.logFile = logFile
 				cmd.Stdout = logFile
 				cmd.Stderr = logFile
 			}
@@ -317,7 +371,6 @@ func (sm *ServerManager) launchCustomCommand(config *models.ModelConfig, done ch
 		if err := cmd.Start(); err != nil {
 			sm.logger("Failed to start custom command: %v", err)
 			sm.clearServerState()
-			close(done)
 			return
 		}
 
@@ -331,14 +384,19 @@ func (sm *ServerManager) launchCustomCommand(config *models.ModelConfig, done ch
 			sm.server.CrashCount = crashCount
 		}
 		sm.mutex.Unlock()
-		close(done)
 
 		waitErr := cmd.Wait()
+
+		if sm.logFile != nil {
+			sm.logFile.Close()
+			sm.logFile = nil
+		}
+
 		pidCopy := pid
 
 		select {
-		case <-stopChan:
-			sm.logger("Custom command stopped for model: %s", config.Name)
+		case <-ctx.Done():
+			sm.logger("Custom command context cancelled for model: %s", config.Name)
 			sm.clearServerStateIfPIDMatches(pidCopy)
 			return
 		default:
@@ -366,7 +424,6 @@ func (sm *ServerManager) launchCustomCommand(config *models.ModelConfig, done ch
 				sm.mutex.Unlock()
 
 				time.Sleep(delay)
-				done = make(chan struct{})
 				continue
 			}
 
@@ -432,7 +489,7 @@ func (sm *ServerManager) createLogFile(modelName string) (*os.File, error) {
 func (sm *ServerManager) StopCurrent() error {
 	sm.mutex.Lock()
 
-	if sm.server == nil || sm.server.Status != models.StatusRunning {
+	if sm.server == nil || (sm.server.Status != models.StatusRunning && sm.server.Status != models.StatusStarting) {
 		sm.mutex.Unlock()
 		return fmt.Errorf("no model is currently running")
 	}
@@ -442,22 +499,18 @@ func (sm *ServerManager) StopCurrent() error {
 
 	sm.mutex.Unlock()
 
-	select {
-	case stopChan := <-sm.serverStopChan:
-		close(stopChan)
-	default:
-	}
+	sm.cancelFunc()
 
 	p, err := os.FindProcess(pid)
 	if err != nil {
-		return fmt.Errorf("failed to find process: %w", err)
+		sm.logger("Failed to find process: %v", err)
+	} else {
+		if err := p.Kill(); err != nil {
+			sm.logger("Warning: failed to kill process: %v", err)
+		} else {
+			sm.logger("Server process killed for PID: %d", pid)
+		}
 	}
-
-	if err := p.Kill(); err != nil {
-		return fmt.Errorf("failed to kill process: %w", err)
-	}
-
-	sm.logger("Server process killed for PID: %d", pid)
 
 	sm.clearServerStateIfPIDMatches(pid)
 

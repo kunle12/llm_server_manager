@@ -348,11 +348,12 @@ See [tools/cli/README.md](tools/cli/README.md) for full documentation.
 The application handles the following scenarios:
 
 1. **Configuration Errors**: Missing or invalid config file
-2. **Duplicate Server**: Prevents starting a server when one is already running
-3. **Model Not Found**: Returns error when attempting to start unknown model
-4. **Wrong Model**: Prevents stopping a server running a different model
-5. **Process Errors**: Handles failures in starting/killing llama.cpp processes
-6. **Graceful Shutdown**: Stops servers properly on SIGINT/SIGTERM
+2. **Model Config Validation**: Validates name, model_path, threads > 0, temperature 0.0-2.0
+3. **Duplicate Server**: Prevents starting a server when one is already running
+4. **Model Not Found**: Returns error when attempting to start unknown model
+5. **Wrong Model**: Prevents stopping a server running a different model
+6. **Process Errors**: Handles failures in starting/killing llama.cpp processes
+7. **Graceful Shutdown**: Stops servers properly on SIGINT/SIGTERM
 
 ## Logging
 
@@ -368,16 +369,19 @@ All operations are logged to stdout with timestamps:
 ## Thread Safety
 
 The application uses `sync.RWMutex` to ensure thread-safe operations:
-- Multiple concurrent reads (ListModels, GetCurrentServer)
+- Multiple concurrent reads (ListModels, ReloadConfigs) use RLock
 - Exclusive write access during server start/stop operations
-- Protection against race conditions in server state management
+- GetCurrentServer uses exclusive Lock to prevent race conditions
+- Context cancellation for graceful server stop without deadlock
 
 ## Security Considerations
 
-- CORS is enabled for all endpoints
-- No authentication is implemented (add reverse proxy if needed)
-- Process execution uses direct command execution
-- Validate model names to prevent command injection
+- CORS enabled for all origins by default (restrict via `LLM_ALLOWED_ORIGINS`)
+- API key authentication via `LLM_MANAGER_API_KEY` environment variable
+- Timing-attack safe API key comparison using `crypto/subtle.ConstantTimeCompare`
+- Rate limiting: 10 requests/second per IP with 20 burst capacity
+- Request body size limited to 1KB to prevent memory exhaustion
+- Daemon PID file has restricted `0600` permissions
 
 ## Development
 

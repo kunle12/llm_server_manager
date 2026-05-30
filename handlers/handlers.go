@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -196,15 +197,14 @@ func (h *Handler) CORS(next http.Handler) http.Handler {
 		origin := r.Header.Get("Origin")
 
 		if origin != "" {
-			// If allowed origins are configured, only allow those
 			if len(h.allowedOrigins) > 0 {
-				if h.allowedOrigins[origin] {
-					w.Header().Set("Access-Control-Allow-Origin", origin)
-					w.Header().Set("Vary", "Origin")
+				if !h.allowedOrigins[origin] {
+					http.Error(w, "origin not allowed", http.StatusForbidden)
+					return
 				}
-				// Otherwise, don't set CORS headers (origin not allowed)
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
 			} else {
-				// No restrictions - allow any origin (legacy behavior)
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
 			}
@@ -238,7 +238,7 @@ func (h *Handler) RequireAPIKey(next http.Handler) http.Handler {
 			return
 		}
 
-		if providedKey != h.apiKey {
+		if subtle.ConstantTimeCompare([]byte(providedKey), []byte(h.apiKey)) != 1 {
 			h.sendJSON(w, http.StatusUnauthorized, models.APIResponse{
 				Success: false,
 				Message: "invalid api key",

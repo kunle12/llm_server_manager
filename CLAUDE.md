@@ -135,9 +135,16 @@ This is a **layered Go application** that manages multiple llama.cpp server inst
 ### Thread Safety Model
 
 The application uses `sync.RWMutex` for thread-safe operations:
-- **Multiple concurrent reads**: `ListModels()`, `GetCurrentServer()` use RLock
-- **Exclusive writes**: `StartModel()`, `StopCurrent()` use Lock
+- **Multiple concurrent reads**: `ListModels()`, `ReloadConfigs()` use RLock
+- **Exclusive writes**: `StartModel()`, `StopCurrent()`, `GetCurrentServer()` use Lock
 - **Race condition protection**: Server state updates are atomic
+
+### Cancellation Model
+
+Server lifecycle uses `context.Context` for cancellation:
+- `StartModel()` creates a new context and cancel function
+- `StopCurrent()` calls `cancelFunc()` to signal the server goroutine
+- Server goroutine monitors `ctx.Done()` to handle stop requests
 
 ### Process Management
 
@@ -324,13 +331,14 @@ All operations log to stdout with timestamp:
 - API key authentication via `LLM_MANAGER_API_KEY` environment variable
 - Key must be exactly 16 alphanumeric characters
 - Key validated on each API request via `api-key` header
+- Uses `crypto/subtle.ConstantTimeCompare` to prevent timing attacks
 - API key validated at CLI startup with warning if invalid format
 
 ### CORS Security
 
 - Default: CORS enabled for all origins (`Access-Control-Allow-Origin: *`)
 - Restricted mode: Set `LLM_ALLOWED_ORIGINS` to comma-separated origins
-- Requests from non-allowed origins receive no CORS headers
+- Requests from non-allowed origins receive `403 Forbidden`
 - Vary: Origin header always set for cache-aware proxies
 
 ### Rate Limiting
@@ -339,6 +347,7 @@ All operations log to stdout with timestamp:
 - Excess requests receive `429 Too Many Requests`
 - Uses `golang.org/x/time/rate` for token bucket algorithm
 - Rate limiter applied before authentication
+- Periodic cleanup of stale entries every 5 minutes (prevents memory leak)
 
 ### Request Size Limits
 
@@ -380,7 +389,12 @@ All operations log to stdout with timestamp:
 - ServerManager prevents starting a new server if one is already running
 - The `host` field does not exist in config (hardcoded to 0.0.0.0 in manager.go:164)
 - No tests exist (test files would be `*_test.go`)
-- No .gitignore rules for binary or log files (consider adding)
+- Model config validation: Name required, ModelPath required, Threads > 0, Temperature 0.0-2.0
+- Cancellation uses `context.Context` (not chan chan struct{}) to avoid deadlock
+- Log file handle properly closed after `cmd.Wait()` before retry/exit
+- Viper state reset on config load for consistency with reload
+- Rate limiter has periodic cleanup to prevent memory leak
+- Watcher properly closed on error paths and during shutdown
 
 ### CLI Tool Structure (tools/cli/)
 

@@ -72,15 +72,20 @@ func runDaemon(configPath string, enableLogging bool, listenAddr string, maxRetr
 		}
 	}
 
-	// Prepare command attributes with detached files
+	devNull, err := os.Open("/dev/null")
+	if err != nil {
+		return fmt.Errorf("failed to open /dev/null: %w", err)
+	}
+	defer devNull.Close()
+
 	attr := &os.ProcAttr{
 		Files: []*os.File{
-			nil, // stdin - will be detached
-			nil, // stdout - will be detached
-			nil, // stderr - will be detached
+			devNull, // stdin
+			devNull, // stdout
+			devNull, // stderr
 		},
 		Sys: &syscall.SysProcAttr{
-			Setsid: true, // Create new session
+			Setsid: true,
 		},
 	}
 

@@ -12,6 +12,7 @@ type Config struct {
 }
 
 func Load(configPath string) (*Config, error) {
+	viper.Reset()
 	viper.SetConfigFile(configPath)
 	viper.SetConfigType("json")
 

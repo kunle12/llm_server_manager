@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,34 +22,59 @@ import (
 )
 
 type App struct {
-	mgr           *manager.ServerManager
-	handler       *handlers.Handler
-	logger        func(format string, args ...interface{})
-	router        *mux.Router
-	httpSrv       *http.Server
-	config        *config.Config
-	enableLogging bool
-	configPath    string
+	mgr              *manager.ServerManager
+	handler          *handlers.Handler
+	logger           func(format string, args ...interface{})
+	router           *mux.Router
+	httpSrv          *http.Server
+	config           *config.Config
+	enableLogging    bool
+	configPath       string
+	watcherWg        sync.WaitGroup
 }
 
 // rateLimiter provides per-IP rate limiting
 type rateLimiter struct {
-	limiters map[string]*rate.Limiter
-	rate     rate.Limit
-	burst    int
+	limiters    map[string]*rate.Limiter
+	rate        rate.Limit
+	burst       int
+	mu          sync.Mutex
+	lastCleanup time.Time
+	cleanupInterval time.Duration
 }
 
 func newRateLimiter(r rate.Limit, b int) *rateLimiter {
 	return &rateLimiter{
-		limiters: make(map[string]*rate.Limiter),
-		rate:     r,
-		burst:    b,
+		limiters:       make(map[string]*rate.Limiter),
+		rate:           r,
+		burst:          b,
+		lastCleanup:    time.Now(),
+		cleanupInterval: 5 * time.Minute,
 	}
 }
 
 func (rl *rateLimiter) getLimiter(ip string) *rate.Limiter {
-	rl.limiters[ip] = rate.NewLimiter(rl.rate, rl.burst)
-	return rl.limiters[ip]
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	limiter, exists := rl.limiters[ip]
+	if !exists {
+		limiter = rate.NewLimiter(rl.rate, rl.burst)
+		rl.limiters[ip] = limiter
+	}
+
+	if time.Since(rl.lastCleanup) > rl.cleanupInterval {
+		rl.cleanup()
+		rl.lastCleanup = time.Now()
+	}
+
+	return limiter
+}
+
+func (rl *rateLimiter) cleanup() {
+	for ip := range rl.limiters {
+		delete(rl.limiters, ip)
+	}
 }
 
 func (rl *rateLimiter) limit(next http.Handler) http.Handler {
@@ -119,13 +145,15 @@ func (a *App) WatchConfig() {
 		return
 	}
 
-	// Watch the config file
 	if err := watcher.Add(a.configPath); err != nil {
 		a.logger("Failed to watch config file: %v", err)
+		watcher.Close()
 		return
 	}
 
+	a.watcherWg.Add(1)
 	go func() {
+		defer a.watcherWg.Done()
 		for {
 			select {
 			case <-a.mgr.GetStopChan():
@@ -135,7 +163,6 @@ func (a *App) WatchConfig() {
 				if !ok {
 					return
 				}
-				// Reload on write/remove operations
 				if event.Op&(fsnotify.Write|fsnotify.Remove) != 0 {
 					a.logger("Config file changed, reloading...")
 					if err := a.reloadConfig(); err != nil {
@@ -228,8 +255,8 @@ func (a *App) Shutdown() error {
 		}
 	}
 
-	// Signal the config watcher to stop
 	a.mgr.CloseStopChan()
+	a.watcherWg.Wait()
 
 	if a.mgr.GetCurrentServer() != nil {
 		a.logger("Stopping running server...")
