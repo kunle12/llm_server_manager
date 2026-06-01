@@ -52,8 +52,8 @@ func main() {
 
 	if err := app.Start(listenAddr); err != nil {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
-		os.Exit(1)
 	}
+	os.Remove("/tmp/llm_server_manager.pid")
 }
 
 // runDaemon implements daemonization by re-executing the binary

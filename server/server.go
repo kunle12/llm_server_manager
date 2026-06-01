@@ -34,21 +34,26 @@ type App struct {
 }
 
 // rateLimiter provides per-IP rate limiting
+type rateLimiterEntry struct {
+	limiter  *rate.Limiter
+	lastUsed time.Time
+}
+
 type rateLimiter struct {
-	limiters    map[string]*rate.Limiter
-	rate        rate.Limit
-	burst       int
-	mu          sync.Mutex
-	lastCleanup time.Time
+	limiters        map[string]*rateLimiterEntry
+	rate            rate.Limit
+	burst           int
+	mu              sync.Mutex
+	lastCleanup     time.Time
 	cleanupInterval time.Duration
 }
 
 func newRateLimiter(r rate.Limit, b int) *rateLimiter {
 	return &rateLimiter{
-		limiters:       make(map[string]*rate.Limiter),
-		rate:           r,
-		burst:          b,
-		lastCleanup:    time.Now(),
+		limiters:        make(map[string]*rateLimiterEntry),
+		rate:            r,
+		burst:           b,
+		lastCleanup:     time.Now(),
 		cleanupInterval: 5 * time.Minute,
 	}
 }
@@ -57,10 +62,15 @@ func (rl *rateLimiter) getLimiter(ip string) *rate.Limiter {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
-	limiter, exists := rl.limiters[ip]
+	entry, exists := rl.limiters[ip]
 	if !exists {
-		limiter = rate.NewLimiter(rl.rate, rl.burst)
-		rl.limiters[ip] = limiter
+		entry = &rateLimiterEntry{
+			limiter:  rate.NewLimiter(rl.rate, rl.burst),
+			lastUsed: time.Now(),
+		}
+		rl.limiters[ip] = entry
+	} else {
+		entry.lastUsed = time.Now()
 	}
 
 	if time.Since(rl.lastCleanup) > rl.cleanupInterval {
@@ -68,12 +78,14 @@ func (rl *rateLimiter) getLimiter(ip string) *rate.Limiter {
 		rl.lastCleanup = time.Now()
 	}
 
-	return limiter
+	return entry.limiter
 }
 
 func (rl *rateLimiter) cleanup() {
-	for ip := range rl.limiters {
-		delete(rl.limiters, ip)
+	for ip, entry := range rl.limiters {
+		if time.Since(entry.lastUsed) > rl.cleanupInterval {
+			delete(rl.limiters, ip)
+		}
 	}
 }
 
@@ -188,7 +200,12 @@ func (a *App) reloadConfig() error {
 
 	modelMap := make(map[string]*models.ModelConfig)
 	for i := range cfg.Models {
-		modelMap[cfg.Models[i].Name] = &cfg.Models[i]
+		config := &cfg.Models[i]
+		if config.Name == "" {
+			a.logger("Warning: skipping model with empty name in reloaded config")
+			continue
+		}
+		modelMap[config.Name] = config
 	}
 
 	a.mgr.ReloadConfigs(modelMap)
@@ -246,6 +263,9 @@ func (a *App) Start(listenAddr string) error {
 }
 
 func (a *App) Shutdown() error {
+	// Clean up PID file if it exists (created by daemon mode)
+	os.Remove("/tmp/llm_server_manager.pid")
+
 	if a.httpSrv != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

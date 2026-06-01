@@ -102,6 +102,7 @@ func (sm *ServerManager) StartModel(modelName string) error {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	sm.cancelFunc = cancel
 
 	sm.server = &models.RunningServer{
 		ModelConfig: *config,
@@ -129,12 +130,14 @@ func validateModelConfig(config *models.ModelConfig) error {
 		}
 	}
 
-	if config.Threads <= 0 {
-		return fmt.Errorf("threads must be positive")
-	}
+	if config.LaunchCmd == nil || *config.LaunchCmd == "" {
+		if config.Threads <= 0 {
+			return fmt.Errorf("threads must be positive")
+		}
 
-	if config.Temperature < 0 || config.Temperature > 2 {
-		return fmt.Errorf("temperature must be between 0 and 2")
+		if config.Temperature < 0 || config.Temperature > 2 {
+			return fmt.Errorf("temperature must be between 0 and 2")
+		}
 	}
 
 	return nil
@@ -197,8 +200,18 @@ func (sm *ServerManager) launchServer(ctx context.Context, config *models.ModelC
 			sm.server.PID = pid
 			sm.server.Status = models.StatusRunning
 			sm.server.CrashCount = crashCount
+			sm.mutex.Unlock()
+		} else {
+			sm.mutex.Unlock()
+			// Server state was cleared (e.g., by StopCurrent), kill orphan
+			sm.logger("Server state missing after start, killing orphan PID: %d", pid)
+			cmd.Process.Kill()
+			if sm.logFile != nil {
+				sm.logFile.Close()
+				sm.logFile = nil
+			}
+			return
 		}
-		sm.mutex.Unlock()
 
 		waitErr := cmd.Wait()
 
@@ -377,8 +390,18 @@ func (sm *ServerManager) launchCustomCommand(ctx context.Context, config *models
 			sm.server.PID = pid
 			sm.server.Status = models.StatusRunning
 			sm.server.CrashCount = crashCount
+			sm.mutex.Unlock()
+		} else {
+			sm.mutex.Unlock()
+			// Server state was cleared (e.g., by StopCurrent), kill orphan
+			sm.logger("Server state missing after start, killing orphan PID: %d", pid)
+			cmd.Process.Kill()
+			if sm.logFile != nil {
+				sm.logFile.Close()
+				sm.logFile = nil
+			}
+			return
 		}
-		sm.mutex.Unlock()
 
 		waitErr := cmd.Wait()
 
@@ -496,14 +519,19 @@ func (sm *ServerManager) StopCurrent() error {
 
 	sm.cancelFunc()
 
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		sm.logger("Failed to find process: %v", err)
-	} else {
-		if err := p.Kill(); err != nil {
-			sm.logger("Warning: failed to kill process: %v", err)
+	// Only kill process if PID is valid (PID > 0). PID 0 means the process
+	// hasn't started yet, and syscall.Kill(0, SIGKILL) would kill the
+	// calling process's process group (the manager itself).
+	if pid > 0 {
+		p, err := os.FindProcess(pid)
+		if err != nil {
+			sm.logger("Failed to find process: %v", err)
 		} else {
-			sm.logger("Server process killed for PID: %d", pid)
+			if err := p.Kill(); err != nil {
+				sm.logger("Warning: failed to kill process: %v", err)
+			} else {
+				sm.logger("Server process killed for PID: %d", pid)
+			}
 		}
 	}
 
