@@ -195,6 +195,22 @@ func (sm *ServerManager) launchServer(ctx context.Context, config *models.ModelC
 		pid := cmd.Process.Pid
 		sm.logger("Server started successfully with PID: %d", pid)
 
+		// StopCurrent may have run while we were starting (it saw PID 0 and
+		// skipped the kill). If the context is cancelled now, kill the orphan
+		// process group and bail out.
+		select {
+		case <-ctx.Done():
+			sm.logger("Server context cancelled after start, killing orphan PID: %d", pid)
+			killProcessGroup(pid)
+			if sm.logFile != nil {
+				sm.logFile.Close()
+				sm.logFile = nil
+			}
+			sm.clearServerStateIfPIDMatches(pid)
+			return
+		default:
+		}
+
 		sm.mutex.Lock()
 		if sm.server != nil {
 			sm.server.PID = pid
@@ -205,7 +221,7 @@ func (sm *ServerManager) launchServer(ctx context.Context, config *models.ModelC
 			sm.mutex.Unlock()
 			// Server state was cleared (e.g., by StopCurrent), kill orphan
 			sm.logger("Server state missing after start, killing orphan PID: %d", pid)
-			cmd.Process.Kill()
+			killProcessGroup(pid)
 			if sm.logFile != nil {
 				sm.logFile.Close()
 				sm.logFile = nil
@@ -342,6 +358,9 @@ func (sm *ServerManager) buildCommand(config *models.ModelConfig) *exec.Cmd {
 	}
 
 	cmd := exec.Command(sm.llamaPath, args...)
+	// Run the server in its own process group so StopCurrent can kill the
+	// whole group (including any child processes) without hitting the manager.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	return cmd
 }
 
@@ -358,6 +377,9 @@ func (sm *ServerManager) launchCustomCommand(ctx context.Context, config *models
 		}
 
 		cmd := exec.Command("bash", "-c", *config.LaunchCmd)
+		// Run the wrapper in its own process group so StopCurrent can kill the
+		// whole group (including any llama-server children it spawns).
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 		if sm.enableLogging {
 			if sm.logFile != nil {
@@ -385,6 +407,22 @@ func (sm *ServerManager) launchCustomCommand(ctx context.Context, config *models
 		pid := cmd.Process.Pid
 		sm.logger("Custom command started successfully with PID: %d", pid)
 
+		// StopCurrent may have run while we were starting (it saw PID 0 and
+		// skipped the kill). If the context is cancelled now, kill the orphan
+		// process group and bail out.
+		select {
+		case <-ctx.Done():
+			sm.logger("Custom command context cancelled after start, killing orphan PID: %d", pid)
+			killProcessGroup(pid)
+			if sm.logFile != nil {
+				sm.logFile.Close()
+				sm.logFile = nil
+			}
+			sm.clearServerStateIfPIDMatches(pid)
+			return
+		default:
+		}
+
 		sm.mutex.Lock()
 		if sm.server != nil {
 			sm.server.PID = pid
@@ -395,7 +433,7 @@ func (sm *ServerManager) launchCustomCommand(ctx context.Context, config *models
 			sm.mutex.Unlock()
 			// Server state was cleared (e.g., by StopCurrent), kill orphan
 			sm.logger("Server state missing after start, killing orphan PID: %d", pid)
-			cmd.Process.Kill()
+			killProcessGroup(pid)
 			if sm.logFile != nil {
 				sm.logFile.Close()
 				sm.logFile = nil
@@ -519,25 +557,27 @@ func (sm *ServerManager) StopCurrent() error {
 
 	sm.cancelFunc()
 
-	// Only kill process if PID is valid (PID > 0). PID 0 means the process
-	// hasn't started yet, and syscall.Kill(0, SIGKILL) would kill the
-	// calling process's process group (the manager itself).
+	// Kill the server's process group. PID 0 means the process hasn't
+	// started yet; killing PID 0 would target the manager's own process
+	// group (suicide), so we skip and rely on the launcher's ctx.Done()
+	// check to kill whatever it spawns once the context is cancelled.
 	if pid > 0 {
-		p, err := os.FindProcess(pid)
-		if err != nil {
-			sm.logger("Failed to find process: %v", err)
+		if err := killProcessGroup(pid); err != nil {
+			sm.logger("Warning: failed to kill process group: %v", err)
 		} else {
-			if err := p.Kill(); err != nil {
-				sm.logger("Warning: failed to kill process: %v", err)
-			} else {
-				sm.logger("Server process killed for PID: %d", pid)
-			}
+			sm.logger("Server process group killed for PID: %d", pid)
 		}
 	}
 
 	sm.clearServerStateIfPIDMatches(pid)
 
 	return nil
+}
+
+// killProcessGroup sends SIGKILL to the process group led by pid, which
+// terminates the server and any child processes it spawned.
+func killProcessGroup(pid int) error {
+	return syscall.Kill(-pid, syscall.SIGKILL)
 }
 
 // ReloadConfigs updates the manager's configurations with new ones
