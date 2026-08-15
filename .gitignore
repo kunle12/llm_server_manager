@@ -1,5 +1,6 @@
 # Binaries
 llm_server_manager
+llm_server_manager_linux_arm64
 llm-cli
 *.exe
 *.exe~

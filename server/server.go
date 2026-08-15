@@ -22,15 +22,15 @@ import (
 )
 
 type App struct {
-	mgr              *manager.ServerManager
-	handler          *handlers.Handler
-	logger           func(format string, args ...interface{})
-	router           *mux.Router
-	httpSrv          *http.Server
-	config           *config.Config
-	enableLogging    bool
-	configPath       string
-	watcherWg        sync.WaitGroup
+	mgr           *manager.ServerManager
+	handler       *handlers.Handler
+	logger        func(format string, args ...interface{})
+	router        *mux.Router
+	httpSrv       *http.Server
+	config        *config.Config
+	enableLogging bool
+	configPath    string
+	watcherWg     sync.WaitGroup
 }
 
 // rateLimiter provides per-IP rate limiting
@@ -100,10 +100,17 @@ func (rl *rateLimiter) limit(next http.Handler) http.Handler {
 	})
 }
 
-// maxBytesReader limits request body size to prevent memory exhaustion attacks
-func maxBytesReader(maxBytes int64) func(http.Handler) http.Handler {
+// maxRequestSize enforces a maximum request body size to prevent memory
+// exhaustion attacks. Content-Length is checked up front so oversized
+// requests are rejected without reading the body; MaxBytesReader remains as
+// a backstop for chunked/unknown-length bodies.
+func maxRequestSize(maxBytes int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.ContentLength > maxBytes {
+				http.Error(w, "request entity too large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 			next.ServeHTTP(w, r)
 		})
@@ -223,7 +230,7 @@ func (a *App) setupRouter() {
 	r.Use(rl.limit)
 
 	// Limit request body to 1KB to prevent memory exhaustion
-	r.Use(maxBytesReader(1024))
+	r.Use(maxRequestSize(1024))
 
 	api := r.PathPrefix("/api/v1").Subrouter()
 	api.Use(a.handler.RequireAPIKey)

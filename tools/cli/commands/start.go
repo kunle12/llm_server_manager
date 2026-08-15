@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"time"
 
 	"llm-manager-cli/llmcontrol"
 
@@ -66,18 +65,4 @@ func (c *StartCommand) run(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-// WaitForServer waits for the server to be running
-func (c *StartCommand) WaitForServer(timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		statusCmd := NewStatusCommand(c.root)
-		err := statusCmd.run(statusCmd.Cmd(), nil)
-		if err == nil {
-			return nil
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	return fmt.Errorf("timeout waiting for server to start")
 }

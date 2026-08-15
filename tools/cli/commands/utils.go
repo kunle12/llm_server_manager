@@ -45,13 +45,3 @@ func PrintResponse(w io.Writer, resp *http.Response, statusOK bool, outputJSON b
 
 	return nil
 }
-
-// CheckServer checks if the server is reachable
-func CheckServer(root *RootCommand) error {
-	resp, err := root.DoRequest(http.MethodGet, "/api/v1/models", nil)
-	if err != nil {
-		return fmt.Errorf("server not reachable: %w", err)
-	}
-	resp.Body.Close()
-	return nil
-}

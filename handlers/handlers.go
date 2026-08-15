@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	apiKeyHeader     = "api-key"
-	envAPIKey        = "LLM_MANAGER_API_KEY"
+	apiKeyHeader      = "api-key"
+	envAPIKey         = "LLM_MANAGER_API_KEY"
 	envAllowedOrigins = "LLM_ALLOWED_ORIGINS"
 )
 
@@ -133,6 +133,7 @@ func (h *Handler) StartModel(w http.ResponseWriter, r *http.Request) {
 	h.sendJSON(w, http.StatusOK, models.APIResponse{
 		Success: true,
 		Message: fmt.Sprintf("model '%s' starting", modelName),
+		Data:    h.manager.GetCurrentServer(),
 	})
 }
 
@@ -165,25 +166,8 @@ func (h *Handler) StopModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	current := h.manager.GetCurrentServer()
-	if current == nil {
+	if err := h.manager.StopModel(modelName); err != nil {
 		h.sendJSON(w, http.StatusBadRequest, models.APIResponse{
-			Success: false,
-			Message: "no server is currently running",
-		})
-		return
-	}
-
-	if current.ModelConfig.Name != modelName {
-		h.sendJSON(w, http.StatusBadRequest, models.APIResponse{
-			Success: false,
-			Message: fmt.Sprintf("server is running model '%s', not '%s'", current.ModelConfig.Name, modelName),
-		})
-		return
-	}
-
-	if err := h.manager.StopCurrent(); err != nil {
-		h.sendJSON(w, http.StatusInternalServerError, models.APIResponse{
 			Success: false,
 			Message: err.Error(),
 		})
@@ -192,7 +176,7 @@ func (h *Handler) StopModel(w http.ResponseWriter, r *http.Request) {
 
 	h.sendJSON(w, http.StatusOK, models.APIResponse{
 		Success: true,
-		Message: fmt.Sprintf("model '%s' stopped successfully", current.ModelConfig.Name),
+		Message: fmt.Sprintf("model '%s' stopped successfully", modelName),
 	})
 }
 
@@ -212,17 +196,12 @@ func (h *Handler) CORS(next http.Handler) http.Handler {
 		origin := r.Header.Get("Origin")
 
 		if origin != "" {
-			if len(h.allowedOrigins) > 0 {
-				if !h.allowedOrigins[origin] {
-					http.Error(w, "origin not allowed", http.StatusForbidden)
-					return
-				}
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Vary", "Origin")
-			} else {
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Vary", "Origin")
+			if len(h.allowedOrigins) > 0 && !h.allowedOrigins[origin] {
+				http.Error(w, "origin not allowed", http.StatusForbidden)
+				return
 			}
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
 		}
 
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")

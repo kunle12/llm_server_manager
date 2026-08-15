@@ -23,10 +23,10 @@ const (
 var validAPIKeyPattern = regexp.MustCompile(`^[a-zA-Z0-9]{16}$`)
 
 type RootCommand struct {
-	Cmd            *cobra.Command
-	HTTPClient     *http.Client
-	TLSClient      *http.Client
-	SkipTLSVerify  bool
+	Cmd           *cobra.Command
+	HTTPClient    *http.Client
+	TLSClient     *http.Client
+	SkipTLSVerify bool
 }
 
 func NewRootCommand() *RootCommand {
@@ -50,10 +50,10 @@ Examples:
 	}
 
 	r := &RootCommand{
-		Cmd:            cmd,
-		HTTPClient:     &http.Client{Timeout: timeout},
-		TLSClient:      createTLSClient(),
-		SkipTLSVerify:  false,
+		Cmd:           cmd,
+		HTTPClient:    &http.Client{Timeout: timeout},
+		TLSClient:     createTLSClient(),
+		SkipTLSVerify: false,
 	}
 
 	r.AddCommands()

@@ -22,7 +22,6 @@ type ModelConfig struct {
 type ServerStatus string
 
 const (
-	StatusStopped  ServerStatus = "stopped"
 	StatusStarting ServerStatus = "starting"
 	StatusRunning  ServerStatus = "running"
 	StatusStopping ServerStatus = "stopping"
@@ -49,8 +48,4 @@ type ModelListResponse struct {
 type ModelItem struct {
 	ModelConfig
 	Active bool `json:"active"`
-}
-
-type ServerInfoResponse struct {
-	Server *RunningServer `json:"server"`
 }
