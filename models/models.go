@@ -9,6 +9,8 @@ type ModelConfig struct {
 	Temperature        float64  `json:"temperature,omitempty" mapstructure:"temperature,omitempty"`
 	TopK               *int     `json:"top_k,omitempty" mapstructure:"top_k,omitempty"`
 	TopP               *float64 `json:"top_p,omitempty" mapstructure:"top_p,omitempty"`
+	PresencePenalty    *float64 `json:"presence_penalty,omitempty" mapstructure:"presence_penalty,omitempty"`
+	RepetitionPenalty  *float64 `json:"repetition_penalty,omitempty" mapstructure:"repetition_penalty,omitempty"`
 	Threads            int      `json:"threads,omitempty" mapstructure:"threads,omitempty"`
 	Port               *int     `json:"port,omitempty" mapstructure:"port,omitempty"`
 	Mmproj             *string  `json:"mmproj,omitempty" mapstructure:"mmproj,omitempty"`

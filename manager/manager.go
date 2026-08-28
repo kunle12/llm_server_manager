@@ -145,6 +145,14 @@ func validateModelConfig(config *models.ModelConfig) error {
 		if config.Temperature < 0 || config.Temperature > 2 {
 			return fmt.Errorf("temperature must be between 0 and 2")
 		}
+
+		if config.PresencePenalty != nil && (*config.PresencePenalty < 0 || *config.PresencePenalty > 2) {
+			return fmt.Errorf("presence_penalty must be between 0 and 2")
+		}
+
+		if config.RepetitionPenalty != nil && *config.RepetitionPenalty < 0 {
+			return fmt.Errorf("repetition_penalty must be non-negative")
+		}
 	}
 
 	return nil
@@ -349,6 +357,14 @@ func (sm *ServerManager) buildCommand(config *models.ModelConfig) *exec.Cmd {
 	}
 	if config.TopP != nil && *config.TopP > 0.0 && *config.TopP <= 1.0 {
 		args = append(args, "--top-p", fmt.Sprintf("%f", *config.TopP))
+	}
+
+	if config.PresencePenalty != nil {
+		args = append(args, "--presence-penalty", fmt.Sprintf("%f", *config.PresencePenalty))
+	}
+
+	if config.RepetitionPenalty != nil {
+		args = append(args, "--repeat-penalty", fmt.Sprintf("%f", *config.RepetitionPenalty))
 	}
 
 	if config.ChatTemplateKwargs != nil && *config.ChatTemplateKwargs != "" {

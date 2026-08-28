@@ -67,6 +67,8 @@ Create a `config.json` file based on `config.json.example`:
       "model_path": "/path/to/llama-7b.gguf",
       "context_size": 4096,
       "temperature": 0.7,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
       "threads": 8,
       "port": 8081,
       "ngl": 32,
@@ -90,6 +92,8 @@ Create a `config.json` file based on `config.json.example`:
 | mmproj           | string   | Path to mmproj file (optional)                   |
 | top_k            | int      | Top-K sampling threshold (optional)              |
 | top_p            | float64  | Top-P sampling threshold 0.0-1.0 (optional)      |
+| presence_penalty | float64  | Presence penalty (optional, default 0.0)        |
+| repetition_penalty | float64 | Repetition penalty (optional, default 1.0)    |
 | mmap             | bool     | Disable memory mapping (optional, adds --no-mmap)|
 | spec-draft-n-max | int      | Speculative decoding draft n max (optional)      |
 | chat_template_kwargs | string | Chat template kwargs (optional)              |

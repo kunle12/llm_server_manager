@@ -197,6 +197,8 @@ The `manager` package handles llama.cpp process lifecycle:
       "model_path": "/path/to/model.gguf",
       "context_size": 4096,
       "temperature": 0.7,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
       "threads": 8,
       "port": 8081,
       "ngl": 32,
@@ -216,6 +218,8 @@ The `manager` package handles llama.cpp process lifecycle:
 - `model_path`: Path to GGUF model file
 - `context_size`: Maximum context window (optional, omit to use llama.cpp default)
 - `temperature`: Sampling temperature (0.0-2.0)
+- `presence_penalty`: Presence penalty (optional, float, default 0.0)
+- `repetition_penalty`: Repetition penalty (optional, float, default 1.0)
 - `threads`: CPU threads to use
 - `port`: Server listen port (optional, defaults to 8081)
 - `ngl`: Number of GPU layers (optional, positive integer)
