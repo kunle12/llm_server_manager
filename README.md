@@ -101,7 +101,7 @@ Create a `config.json` file based on `config.json.example`:
 
 ### Auto-Reload Configurations
 
-The server automatically watches the configuration file for changes. When the file is modified:
+The server watches the directory containing the configuration file and reloads it automatically when the file changes. Watching the directory rather than the file itself means the reload also works with editors such as vim that save by renaming the original to a backup and creating a new file (which replaces the file's inode and would otherwise break a watch placed on the file). When the file is modified:
 
 1. The server detects the change
 2. Reloads the configuration from the file
@@ -414,7 +414,7 @@ llm_server_manager/
 
 - **github.com/gorilla/mux**: HTTP router
 - **github.com/spf13/viper**: Configuration management
-- **github.com/fsnotify/fsnotify**: File system notifications for auto-reload
+- **github.com/fsnotify/fsnotify**: File system notifications for config auto-reload
 
 ## License
 

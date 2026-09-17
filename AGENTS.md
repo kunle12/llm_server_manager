@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to code agents working with the code in this repository.
 
 ## Quick Start
 
@@ -29,6 +29,7 @@ nohup ./llm_server_manager -config=config.json -listen=:8080 > manager.log 2>&1 
 - `-listen`: Address to listen on (default: `:8080`)
 - `-log`: Enable logging to `/tmp/llama-server-{model}-{timestamp}.log`
 - `-daemon`: Run in background daemon mode
+- `-retries`: Max automatic restarts after a crash (default: `6`, `0` disables restarts)
 
 ### Environment Variables
 
@@ -69,6 +70,16 @@ See [tools/cli/README.md](tools/cli/README.md) for full CLI documentation.
 - Go 1.21 or later
 - llama.cpp installed and available in PATH (set `LLAMA_SERVER_PATH` to override, defaults to `llama-server`)
 
+### Running Tests
+
+```bash
+# Full suite
+go test ./...
+
+# Race detector (the config watcher and manager state are concurrency-sensitive)
+go test -race ./...
+```
+
 ## High-Level Architecture
 
 This is a **layered Go application** that manages multiple llama.cpp server instances through a REST API. The architecture follows a clear separation of concerns:
@@ -84,8 +95,9 @@ This is a **layered Go application** that manages multiple llama.cpp server inst
                ▼
 ┌─────────────────────────────────────────┐
 │        server/server.go                 │
-│  • HTTP server setup (gorilla/mux)     │
+│  • HTTP server setup (gorilla/mux)      │
 │  • Router configuration                 │
+│  • Config file watching (auto-reload)   │
 │  • Graceful shutdown handling           │
 │  • Signal handling (SIGINT/SIGTERM)     │
 └──────────────┬──────────────────────────┘
@@ -113,7 +125,7 @@ This is a **layered Go application** that manages multiple llama.cpp server inst
 │      config/config.go                   │
 │  • Configuration loading (Viper)        │
 │  • JSON parsing                         │
-│  • Environment variable support         │
+│  • Reload from file                     │
 └──────────────┬──────────────────────────┘
                │
                ▼
@@ -131,27 +143,30 @@ This is a **layered Go application** that manages multiple llama.cpp server inst
 2. **Thread Safety**: `sync.RWMutex` protects concurrent access to server state
 3. **Graceful Shutdown**: Server stops running processes on termination signals
 4. **Configuration-Driven**: Models defined in JSON config file
+5. **Single Source of Truth**: The manager owns the model map; no layer keeps a private mutable copy of it
 
 ### Thread Safety Model
 
 The application uses `sync.RWMutex` for thread-safe operations:
-- **Multiple concurrent reads**: `ListModels()`, `ReloadConfigs()` use RLock
-- **Exclusive writes**: `StartModel()`, `StopCurrent()`, `GetCurrentServer()` use Lock
+- **Multiple concurrent reads**: `ListModels()` and `ModelCount()` use RLock
+- **Exclusive writes**: `StartModel()`, `StopModel()`, `GetCurrentServer()`, and `ReloadConfigs()` use Lock
 - **Race condition protection**: Server state updates are atomic
+- **No unsynchronised config copies**: `App.GetModelCount()` delegates to `manager.ModelCount()`, so reloads and reads always go through the same lock
 
 ### Cancellation Model
 
 Server lifecycle uses `context.Context` for cancellation:
-- `StartModel()` creates a new context and cancel function
-- `StopCurrent()` calls `cancelFunc()` to signal the server goroutine
+- `StartModel()` creates a new context and cancel function (cancelling any previous one first)
+- `StopModel()` / `StopCurrent()` call `cancelFunc()` to signal the server goroutine
 - Server goroutine monitors `ctx.Done()` to handle stop requests
 
 ### Process Management
 
 The `manager` package handles llama.cpp process lifecycle:
-- **Start**: Launches `llama-server` as subprocess
-- **Monitor**: Tracks PID, status, and start time
-- **Stop**: Sends SIGKILL to running process
+- **Start**: Launches `llama-server` as a subprocess in its own process group
+- **Monitor**: Tracks PID, status, start time, and crash count
+- **Restart**: Relaunches after a crash, up to `-retries` times
+- **Stop**: Kills the server's process group (`killProcessGroup`, manager/manager.go:491) so child processes die with it
 - **Validation**: Checks model file existence and llama.cpp availability
 
 ## Core Components
@@ -166,8 +181,10 @@ The `manager` package handles llama.cpp process lifecycle:
 
 **Key methods**:
 - `StartModel(modelName)`: Starts a model server (prevents duplicate servers)
-- `StopCurrent()`: Stops the currently running server
-- `ListModels()`: Returns all configured models
+- `StopModel(modelName)` / `StopCurrent()`: Stops the running server (optionally requiring it to be a specific model)
+- `ListModels()`: Returns a copy of all configured models
+- `ModelCount()`: Returns the number of configured models
+- `ReloadConfigs(map)`: Atomically replaces the configured model set
 - `GetCurrentServer()`: Returns running server info
 
 **Thread Safety**: Uses `sync.RWMutex` for all state access
@@ -214,7 +231,7 @@ The `manager` package handles llama.cpp process lifecycle:
 ```
 
 **ModelConfig Fields**:
-- `name`: Unique identifier
+- `name`: Unique identifier (required; entries without a name are skipped — see Development Notes)
 - `model_path`: Path to GGUF model file
 - `context_size`: Maximum context window (optional, omit to use llama.cpp default)
 - `temperature`: Sampling temperature (0.0-2.0)
@@ -234,13 +251,15 @@ The `manager` package handles llama.cpp process lifecycle:
 2. Create ServerManager with logger
 3. Setup HTTP router and handlers
 4. Start HTTP server
-5. Wait for shutdown signal
+5. Start config file watcher (auto-reload)
+6. Wait for shutdown signal
 
 **Shutdown Sequence**:
 1. Receive SIGINT/SIGTERM
 2. Shutdown HTTP server (30s timeout)
-3. Stop running llama.cpp process
-4. Exit cleanly
+3. Close the config watcher's stop channel and wait for the watcher goroutine
+4. Stop the running llama.cpp process
+5. Remove the daemon PID file and exit cleanly
 
 ## API Reference
 
@@ -257,36 +276,51 @@ All endpoints return JSON in this format:
 
 ### Server Status Values
 
-- `stopped`: No server running
+`models.ServerStatus` (models/models.go:26) defines three values, reported in the `status` field of the running-server payload:
+
 - `starting`: Server initializing
 - `running`: Server active
 - `stopping`: Server shutting down
+
+There is no `stopped` status. When nothing is running, `GET /api/v1/models/running` responds with `success: false` and the message `no model is operating`, and `/api/v1/models` reports `active: false` for every model.
 
 ## Important Implementation Details
 
 ### HTTP Middleware
 
-The server applies middleware in this order (server/server.go:174-182):
+Middleware is applied in this order (server/server.go:275-288):
 
-1. **Rate Limiting**: 10 requests/second per IP with 20 burst capacity
-   - Uses token bucket algorithm from `golang.org/x/time/rate`
-   - Rate limited before authentication (applies to all requests)
-   - Excess requests return `429 Too Many Requests`
-
-2. **Request Size Limit**: 1KB maximum body size
-   - Prevents memory exhaustion from large request bodies
-   - Returns `413 Request Entity Too Large` for oversized bodies
-
-3. **CORS**: Adds appropriate headers based on origin
+1. **CORS**: Adds appropriate headers based on origin
    - If `LLM_ALLOWED_ORIGINS` set: only allowed origins get CORS headers
    - Otherwise: all origins permitted (legacy behavior)
+
+2. **Rate Limiting**: 10 requests/second per IP with 20 burst capacity
+   - Uses token bucket algorithm from `golang.org/x/time/rate`
+   - Applies to all requests and runs before authentication
+   - Excess requests return `429 Too Many Requests`
+
+3. **Request Size Limit**: 1KB maximum body size
+   - Prevents memory exhaustion from large request bodies
+   - Returns `413 Request Entity Too Large` for oversized bodies
 
 4. **API Key Authentication**: Validates `api-key` header for `/api/v1/*` routes
    - Only applied to API routes, not health check endpoints
 
+### Configuration Auto-Reload
+
+`App.WatchConfig()` (server/server.go) watches the config file and reloads it without restarting the HTTP server:
+
+- The config file's **parent directory** is watched, not the file itself. Editors such as vim save by renaming the original to a backup and creating a new file, which replaces the inode and silently invalidates a watch placed on the file.
+- Events are filtered to the config file by **base name** (robust to path canonicalisation such as `/var` → `/private/var` on macOS) and to `Create | Write | Chmod`, then **debounced by 300ms** so the burst of events from a single save triggers exactly one reload. Debouncing also avoids reading a partially written file.
+- A reload rebuilds the model map (`indexModels`) and swaps it in via `ReloadConfigs`. Only configurations change: a running llama.cpp process is never restarted or stopped by a reload.
+- Reload failures (e.g. invalid JSON) are logged and the previous configuration is kept.
+- Detection is event-driven via `fsnotify`: inotify on Linux, kqueue on macOS. Notifications do not work on network filesystems (NFS/SMB/FUSE), so a config file on such a mount will not auto-reload.
+
+The watcher goroutine stops on `Shutdown()` via the manager's stop channel.
+
 ### llama.cpp Command Construction
 
-The manager builds this command structure (manager/manager.go:152-182):
+The manager builds this command structure (manager/manager.go:331-398):
 ```bash
 llama-server -m <model_path> -c <context_size> --temp <temperature> -t <threads> --no-webui --host 0.0.0.0 --port <port>
 ```
@@ -295,6 +329,8 @@ With optional flags: `--log-disable` (when logging disabled), `--mmproj <path>` 
 Note: `-c <context_size>` is only added when `context_size` is configured and positive.
 
 Override the binary path with `LLAMA_SERVER_PATH` environment variable.
+
+Models configured with `launch_cmd` bypass this construction entirely and are run via `bash -c`.
 
 ### Error Handling
 
@@ -321,7 +357,7 @@ All operations log to stdout with timestamp:
 ### Server Dependencies
 - **github.com/gorilla/mux v1.8.1**: HTTP router
 - **github.com/spf13/viper v1.18.2**: Configuration management
-- **github.com/fsnotify/fsnotify v1.7.0**: File watching for auto-reload
+- **github.com/fsnotify/fsnotify v1.7.0**: Filesystem notifications for config auto-reload (inotify on Linux, kqueue on macOS)
 - **golang.org/x/time v0.5.0**: Rate limiting
 
 ### CLI Dependencies
@@ -337,6 +373,7 @@ All operations log to stdout with timestamp:
 - Key validated on each API request via `api-key` header
 - Uses `crypto/subtle.ConstantTimeCompare` to prevent timing attacks
 - API key validated at CLI startup with warning if invalid format
+- If the key is set but malformed, authentication is disabled and a warning is logged
 
 ### CORS Security
 
@@ -387,18 +424,24 @@ All operations log to stdout with timestamp:
 - Ensure model is in GGUF format
 - Check available system memory
 
+**Config changes are not picked up**:
+- Confirm the file being edited is the one passed to `-config`
+- The config must live on a local filesystem (fsnotify does not work on NFS/SMB/FUSE)
+- A malformed config is rejected and the previous configuration stays active — check the log for `Failed to reload config`
+
 ## Development Notes
 
 - The application is designed to run one llama.cpp server at a time
 - ServerManager prevents starting a new server if one is already running
-- The `host` field does not exist in config (hardcoded to 0.0.0.0 in manager.go:164)
-- No tests exist (test files would be `*_test.go`)
+- The `host` field does not exist in config (hardcoded to 0.0.0.0 in manager/manager.go:343)
+- Tests live in server/server_test.go: config auto-reload across `replace`/`atomic`/`inplace` save styles (race-guarded, run with `go test -race`), and skipping of nameless models on both the load and reload paths
 - Model config validation: Name required, ModelPath required, Threads > 0, Temperature 0.0-2.0
+- Models without a `name` are skipped when the config is indexed (`indexModels`), identically on load and reload; a config with no named models is rejected at startup
 - Cancellation uses `context.Context` (not chan chan struct{}) to avoid deadlock
 - Log file handle properly closed after `cmd.Wait()` before retry/exit
 - Viper state reset on config load for consistency with reload
 - Rate limiter has periodic cleanup to prevent memory leak
-- Watcher properly closed on error paths and during shutdown
+- Config auto-reload watches the config file's parent directory and debounces 300ms (see Configuration Auto-Reload); the watcher goroutine is stopped and awaited during shutdown
 
 ### CLI Tool Structure (tools/cli/)
 

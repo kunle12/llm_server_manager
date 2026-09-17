@@ -62,6 +62,13 @@ func (sm *ServerManager) ListModels() map[string]*models.ModelConfig {
 	return models
 }
 
+// ModelCount returns the number of configured models.
+func (sm *ServerManager) ModelCount() int {
+	sm.mutex.RLock()
+	defer sm.mutex.RUnlock()
+	return len(sm.configs)
+}
+
 func (sm *ServerManager) GetCurrentServer() *models.RunningServer {
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()

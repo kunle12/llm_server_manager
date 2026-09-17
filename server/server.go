@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -27,7 +28,6 @@ type App struct {
 	logger        func(format string, args ...interface{})
 	router        *mux.Router
 	httpSrv       *http.Server
-	config        *config.Config
 	enableLogging bool
 	configPath    string
 	watcherWg     sync.WaitGroup
@@ -117,6 +117,22 @@ func maxRequestSize(maxBytes int64) func(http.Handler) http.Handler {
 	}
 }
 
+// indexModels indexes models by name. Entries without a name are skipped, with
+// a warning, since they can never be addressed through the API. The load and
+// reload paths share this so they cannot disagree about the model set.
+func indexModels(list []models.ModelConfig, logger func(format string, args ...interface{})) map[string]*models.ModelConfig {
+	indexed := make(map[string]*models.ModelConfig, len(list))
+	for i := range list {
+		m := &list[i]
+		if m.Name == "" {
+			logger("Warning: skipping model with empty name (index %d)", i)
+			continue
+		}
+		indexed[m.Name] = m
+	}
+	return indexed
+}
+
 func New(configPath string, enableLogging bool, maxRetries int) (*App, error) {
 	logger := func(format string, args ...interface{}) {
 		log.Printf("[LLM Manager] "+format, args...)
@@ -127,12 +143,7 @@ func New(configPath string, enableLogging bool, maxRetries int) (*App, error) {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	modelMap := make(map[string]*models.ModelConfig)
-	for i := range cfg.Models {
-		modelMap[cfg.Models[i].Name] = &cfg.Models[i]
-	}
-
-	mgr, err := manager.New(modelMap, logger, enableLogging, maxRetries)
+	mgr, err := manager.New(indexModels(cfg.Models, logger), logger, enableLogging, maxRetries)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create server manager: %w", err)
 	}
@@ -142,7 +153,6 @@ func New(configPath string, enableLogging bool, maxRetries int) (*App, error) {
 		mgr:           mgr,
 		handler:       h,
 		logger:        logger,
-		config:        cfg,
 		enableLogging: enableLogging,
 		configPath:    configPath,
 	}
@@ -152,20 +162,41 @@ func New(configPath string, enableLogging bool, maxRetries int) (*App, error) {
 	return app, nil
 }
 
+// GetModelCount returns the number of configured models. It reads through the
+// manager so it stays consistent with concurrent config reloads.
 func (a *App) GetModelCount() int {
-	return len(a.config.Models)
+	return a.mgr.ModelCount()
 }
 
-// WatchConfig starts a goroutine that watches the config file for changes
+// configReloadDebounce is how long to wait after the last config file event
+// before reloading, so a burst of events from a single save is coalesced into
+// one reload.
+const configReloadDebounce = 300 * time.Millisecond
+
+// WatchConfig starts a goroutine that watches the config file and reloads the
+// configuration whenever it changes.
+//
+// The parent directory is watched rather than the file itself: editors such as
+// vim save by renaming the original file to a backup and then creating a new
+// file, which replaces the inode and silently invalidates a watch placed on the
+// file. Watching the directory and filtering events by file name keeps the
+// watch alive across replacements on both Linux (inotify) and macOS (kqueue).
 func (a *App) WatchConfig() {
+	absConfig, err := filepath.Abs(a.configPath)
+	if err != nil {
+		a.logger("Failed to resolve config path: %v", err)
+		return
+	}
+	dir, base := filepath.Dir(absConfig), filepath.Base(absConfig)
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		a.logger("Failed to create config watcher: %v", err)
 		return
 	}
 
-	if err := watcher.Add(a.configPath); err != nil {
-		a.logger("Failed to watch config file: %v", err)
+	if err := watcher.Add(dir); err != nil {
+		a.logger("Failed to watch config directory: %v", err)
 		watcher.Close()
 		return
 	}
@@ -173,21 +204,53 @@ func (a *App) WatchConfig() {
 	a.watcherWg.Add(1)
 	go func() {
 		defer a.watcherWg.Done()
+		defer watcher.Close()
+
+		// A single save can produce several events (rename of the old file,
+		// create of the new one, chmod), so reload once the events settle.
+		// Debouncing also avoids reading the file while it is still being
+		// written.
+		var timer *time.Timer
+		var timerC <-chan time.Time
+		resetTimer := func() {
+			if timer == nil {
+				timer = time.NewTimer(configReloadDebounce)
+			} else {
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(configReloadDebounce)
+			}
+			timerC = timer.C
+		}
+
 		for {
 			select {
 			case <-a.mgr.GetStopChan():
-				watcher.Close()
 				return
+			case <-timerC:
+				timerC = nil
+				a.logger("Config file changed, reloading...")
+				if err := a.reloadConfig(); err != nil {
+					a.logger("Failed to reload config: %v", err)
+				}
 			case event, ok := <-watcher.Events:
 				if !ok {
 					return
 				}
-				if event.Op&(fsnotify.Write|fsnotify.Remove) != 0 {
-					a.logger("Config file changed, reloading...")
-					if err := a.reloadConfig(); err != nil {
-						a.logger("Failed to reload config: %v", err)
-					}
+				// Compare base names: event paths may be canonicalised
+				// differently than the configured path (e.g. symlinked
+				// directories such as /var -> /private/var on macOS).
+				if filepath.Base(event.Name) != base {
+					continue
 				}
+				if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Chmod) == 0 {
+					continue
+				}
+				resetTimer()
 			case err, ok := <-watcher.Errors:
 				if !ok {
 					return
@@ -205,18 +268,7 @@ func (a *App) reloadConfig() error {
 		return err
 	}
 
-	modelMap := make(map[string]*models.ModelConfig)
-	for i := range cfg.Models {
-		config := &cfg.Models[i]
-		if config.Name == "" {
-			a.logger("Warning: skipping model with empty name in reloaded config")
-			continue
-		}
-		modelMap[config.Name] = config
-	}
-
-	a.mgr.ReloadConfigs(modelMap)
-	a.config = cfg
+	a.mgr.ReloadConfigs(indexModels(cfg.Models, a.logger))
 	return nil
 }
 
