@@ -130,7 +130,11 @@ func (sm *ServerManager) StartModel(modelName string) error {
 	return nil
 }
 
-func validateModelConfig(config *models.ModelConfig) error {
+// ValidateModelConfig checks that a model configuration is structurally
+// sound (name, required fields, value ranges). It does not check that
+// referenced files exist, so it is suitable for validating configs before
+// they are written to disk.
+func ValidateModelConfig(config *models.ModelConfig) error {
 	if config.Name == "" {
 		return fmt.Errorf("model name cannot be empty")
 	}
@@ -138,9 +142,6 @@ func validateModelConfig(config *models.ModelConfig) error {
 	if config.LaunchCmd == nil || *config.LaunchCmd == "" {
 		if config.ModelPath == "" {
 			return fmt.Errorf("model_path is required when launch_cmd is not set")
-		}
-		if err := validateModelFile(config.ModelPath); err != nil {
-			return fmt.Errorf("model file validation failed: %w", err)
 		}
 	}
 
@@ -159,6 +160,20 @@ func validateModelConfig(config *models.ModelConfig) error {
 
 		if config.RepetitionPenalty != nil && *config.RepetitionPenalty < 0 {
 			return fmt.Errorf("repetition_penalty must be non-negative")
+		}
+	}
+
+	return nil
+}
+
+func validateModelConfig(config *models.ModelConfig) error {
+	if err := ValidateModelConfig(config); err != nil {
+		return err
+	}
+
+	if config.LaunchCmd == nil || *config.LaunchCmd == "" {
+		if err := validateModelFile(config.ModelPath); err != nil {
+			return fmt.Errorf("model file validation failed: %w", err)
 		}
 	}
 

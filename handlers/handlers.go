@@ -1,14 +1,18 @@
 package handlers
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
+	"llamamanager/config"
 	"llamamanager/manager"
 	"llamamanager/models"
 
@@ -19,6 +23,9 @@ const (
 	apiKeyHeader      = "api-key"
 	envAPIKey         = "LLM_MANAGER_API_KEY"
 	envAllowedOrigins = "LLM_ALLOWED_ORIGINS"
+
+	// maxConfigBodyBytes caps the request body accepted by PUT /api/v1/config.
+	maxConfigBodyBytes = 1 << 20 // 1MB
 )
 
 type Handler struct {
@@ -27,12 +34,14 @@ type Handler struct {
 	apiKey         string
 	enabled        bool
 	allowedOrigins map[string]bool
+	configPath     string
+	onConfigSaved  func() error
 }
 
 // validAPIKeyPattern matches exactly 16 alphanumeric characters
 var validAPIKeyPattern = regexp.MustCompile(`^[a-zA-Z0-9]{16}$`)
 
-func New(mgr *manager.ServerManager, logger func(format string, args ...interface{})) *Handler {
+func New(mgr *manager.ServerManager, logger func(format string, args ...interface{}), configPath string) *Handler {
 	apiKey := os.Getenv(envAPIKey)
 	var enabled bool
 	if apiKey != "" {
@@ -68,6 +77,7 @@ func New(mgr *manager.ServerManager, logger func(format string, args ...interfac
 		apiKey:         apiKey,
 		enabled:        enabled,
 		allowedOrigins: allowedOrigins,
+		configPath:     configPath,
 	}
 }
 
@@ -152,6 +162,156 @@ func (h *Handler) GetRunningModel(w http.ResponseWriter, r *http.Request) {
 		Success: true,
 		Message: fmt.Sprintf("model '%s' is currently operating", current.ModelConfig.Name),
 	})
+}
+
+// SetConfigSavedCallback registers a function invoked after the config file
+// has been rewritten via the API. A returned error is logged and surfaced as
+// a warning; the config watcher retries the reload regardless.
+func (h *Handler) SetConfigSavedCallback(fn func() error) {
+	h.onConfigSaved = fn
+}
+
+// GetConfig returns the raw config file so clients can edit it and PUT it
+// back verbatim. Unlike the other endpoints the body is the file itself, not
+// an APIResponse envelope.
+func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
+	data, err := os.ReadFile(h.configPath)
+	if err != nil {
+		h.sendJSON(w, http.StatusInternalServerError, models.APIResponse{
+			Success: false,
+			Message: fmt.Sprintf("failed to read config: %v", err),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(data); err != nil {
+		h.logger("Failed to write config response: %v", err)
+	}
+}
+
+// SaveConfig validates a config uploaded as raw JSON, writes it to the config
+// file atomically, and triggers a reload. The config watcher also picks the
+// change up on its own, so a failed immediate reload self-heals.
+func (h *Handler) SaveConfig(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxConfigBodyBytes+1))
+	if err != nil {
+		h.sendJSON(w, http.StatusBadRequest, models.APIResponse{
+			Success: false,
+			Message: fmt.Sprintf("failed to read request body: %v", err),
+		})
+		return
+	}
+	if int64(len(body)) > maxConfigBodyBytes {
+		h.sendJSON(w, http.StatusRequestEntityTooLarge, models.APIResponse{
+			Success: false,
+			Message: fmt.Sprintf("config exceeds %d bytes", maxConfigBodyBytes),
+		})
+		return
+	}
+
+	var cfg config.Config
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&cfg); err != nil {
+		h.sendJSON(w, http.StatusBadRequest, models.APIResponse{
+			Success: false,
+			Message: fmt.Sprintf("invalid JSON: %v", err),
+		})
+		return
+	}
+
+	if len(cfg.Models) == 0 {
+		h.sendJSON(w, http.StatusBadRequest, models.APIResponse{
+			Success: false,
+			Message: "config must contain at least one model",
+		})
+		return
+	}
+
+	seen := make(map[string]bool, len(cfg.Models))
+	for i := range cfg.Models {
+		m := &cfg.Models[i]
+		if m.Name == "" {
+			h.sendJSON(w, http.StatusBadRequest, models.APIResponse{
+				Success: false,
+				Message: fmt.Sprintf("model at index %d is missing a name", i),
+			})
+			return
+		}
+		if seen[m.Name] {
+			h.sendJSON(w, http.StatusBadRequest, models.APIResponse{
+				Success: false,
+				Message: fmt.Sprintf("duplicate model name %q", m.Name),
+			})
+			return
+		}
+		seen[m.Name] = true
+		if err := manager.ValidateModelConfig(m); err != nil {
+			h.sendJSON(w, http.StatusBadRequest, models.APIResponse{
+				Success: false,
+				Message: fmt.Sprintf("model %q: %v", m.Name, err),
+			})
+			return
+		}
+	}
+
+	if err := writeConfigFileAtomic(h.configPath, body); err != nil {
+		h.sendJSON(w, http.StatusInternalServerError, models.APIResponse{
+			Success: false,
+			Message: fmt.Sprintf("failed to write config: %v", err),
+		})
+		return
+	}
+
+	h.logger("Config updated via API (%d models)", len(cfg.Models))
+
+	message := "config saved"
+	if h.onConfigSaved != nil {
+		if err := h.onConfigSaved(); err != nil {
+			h.logger("Config reload after save failed: %v", err)
+			message = "config saved; reload pending (file watcher will retry)"
+		}
+	}
+
+	h.sendJSON(w, http.StatusOK, models.APIResponse{
+		Success: true,
+		Message: message,
+	})
+}
+
+// writeConfigFileAtomic writes data to path via a temp file plus rename so a
+// crash mid-write cannot leave a truncated config behind.
+func writeConfigFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+
+	mode := os.FileMode(0o644)
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	}
+
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	// No-op after a successful rename; cleans up on any earlier failure.
+	defer os.Remove(tmpName)
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, mode); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 func (h *Handler) StopModel(w http.ResponseWriter, r *http.Request) {

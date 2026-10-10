@@ -2,11 +2,63 @@ package server
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+// TestConfigEndpointBodyLimit checks that the config endpoint accepts bodies
+// well past the general 1KB API limit (a real config file exceeds 1KB), while
+// other endpoints still enforce it.
+func TestConfigEndpointBodyLimit(t *testing.T) {
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "llama-server")
+	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LLAMA_SERVER_PATH", fakeBin)
+
+	configPath := filepath.Join(dir, "llm_config.json")
+	initial := `{"models":[{"name":"alpha","launch_cmd":"true","threads":1,"temperature":0.7}]}`
+	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app, err := New(configPath, false, 6)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// A valid config padded past 1KB must be accepted on PUT /api/v1/config.
+	big := strings.Repeat("x", 8192)
+	bigCfg := fmt.Sprintf(`{"models":[{"name":"alpha","launch_cmd":"true %s","threads":1}]}`, big)
+	req := httptest.NewRequest("PUT", "/api/v1/config", strings.NewReader(bigCfg))
+	rr := httptest.NewRecorder()
+	app.router.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("PUT /config with %d-byte body: status %d, body %s", len(bigCfg), rr.Code, rr.Body.String())
+	}
+	onDisk, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(onDisk) != bigCfg {
+		t.Fatal("config file was not updated with the large body")
+	}
+
+	// Any other endpoint still enforces the 1KB limit.
+	oversized := strings.Repeat("A", 4096)
+	req = httptest.NewRequest("POST", "/api/v1/models/alpha/start", strings.NewReader(oversized))
+	rr = httptest.NewRecorder()
+	app.router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized non-config body: status %d, want %d", rr.Code, http.StatusRequestEntityTooLarge)
+	}
+}
 
 // TestWatchConfigReloads checks that the config file is reloaded for every
 // common save style. Watching the file itself fails for the "replace" style

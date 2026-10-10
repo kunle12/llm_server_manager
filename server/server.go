@@ -147,7 +147,7 @@ func New(configPath string, enableLogging bool, maxRetries int) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create server manager: %w", err)
 	}
-	h := handlers.New(mgr, logger)
+	h := handlers.New(mgr, logger, configPath)
 
 	app := &App{
 		mgr:           mgr,
@@ -156,6 +156,10 @@ func New(configPath string, enableLogging bool, maxRetries int) (*App, error) {
 		enableLogging: enableLogging,
 		configPath:    configPath,
 	}
+
+	// After an API config save, reload immediately so the response reflects
+	// the new state. The file watcher reloads anyway if this fails.
+	h.SetConfigSavedCallback(app.reloadConfig)
 
 	app.setupRouter()
 
@@ -281,8 +285,18 @@ func (a *App) setupRouter() {
 	rl := newRateLimiter(rate.Limit(10), 20)
 	r.Use(rl.limit)
 
-	// Limit request body to 1KB to prevent memory exhaustion
-	r.Use(maxRequestSize(1024))
+	// Limit request bodies: 1KB is ample for the control API; the config
+	// endpoint accepts up to 1MB since a config file with several models
+	// easily exceeds 1KB.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			limit := int64(1024)
+			if r.URL.Path == "/api/v1/config" {
+				limit = 1 << 20
+			}
+			maxRequestSize(limit)(next).ServeHTTP(w, r)
+		})
+	})
 
 	api := r.PathPrefix("/api/v1").Subrouter()
 	api.Use(a.handler.RequireAPIKey)
@@ -290,6 +304,8 @@ func (a *App) setupRouter() {
 	api.HandleFunc("/models/{model}/start", a.handler.StartModel).Methods("POST")
 	api.HandleFunc("/models/{model}/stop", a.handler.StopModel).Methods("DELETE")
 	api.HandleFunc("/models/running", a.handler.GetRunningModel).Methods("GET")
+	api.HandleFunc("/config", a.handler.GetConfig).Methods("GET")
+	api.HandleFunc("/config", a.handler.SaveConfig).Methods("PUT")
 
 	a.router = r
 }
