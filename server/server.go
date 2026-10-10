@@ -31,6 +31,9 @@ type App struct {
 	enableLogging bool
 	configPath    string
 	watcherWg     sync.WaitGroup
+
+	// ServeUI controls serving the embedded web UI at /ui/ (see registerUIRoutes).
+	ServeUI bool
 }
 
 // rateLimiter provides per-IP rate limiting
@@ -318,6 +321,8 @@ func (a *App) Start(listenAddr string) error {
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
+
+	a.registerUIRoutes()
 
 	// Start config file watcher
 	a.WatchConfig()

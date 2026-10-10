@@ -10,8 +10,11 @@ This file provides guidance to code agents working with the code in this reposit
 # Install dependencies
 go mod tidy
 
-# Build the server
-go build -o llm_server_manager
+# Build the server (no web UI embedded)
+go build -o llm_server_manager .
+
+# Build the server with the web UI embedded (see Web UI section)
+make build-ui
 
 # Build the CLI tool
 cd tools/cli && go build -o llm-cli && cd ..
@@ -30,6 +33,7 @@ nohup ./llm_server_manager -config=config.json -listen=:8080 > manager.log 2>&1 
 - `-log`: Enable logging to `/tmp/llama-server-{model}-{timestamp}.log`
 - `-daemon`: Run in background daemon mode
 - `-retries`: Max automatic restarts after a crash (default: `6`, `0` disables restarts)
+- `-ui`: Serve the embedded web UI at `/ui/` (only effective in binaries built with `-tags embedui`; otherwise a warning is logged)
 
 ### Environment Variables
 
@@ -196,6 +200,8 @@ The `manager` package handles llama.cpp process lifecycle:
 - `POST /api/v1/models/{model}/start`: Start a model server
 - `DELETE /api/v1/models/{model}/stop`: Stop a model server
 - `GET /api/v1/models/running`: Get currently running model
+- `GET /api/v1/config`: Return the raw config file (body is the file itself, not the envelope)
+- `PUT /api/v1/config`: Validate and atomically write a new config (raw JSON body); reloads immediately, with the file watcher as fallback
 
 **Features**:
 - CORS support for cross-origin requests
@@ -392,7 +398,7 @@ All operations log to stdout with timestamp:
 
 ### Request Size Limits
 
-- Request body limited to 1KB
+- Request body limited to 1KB for all endpoints except `PUT /api/v1/config`, which accepts up to 1MB (a config file with several models exceeds 1KB)
 - Prevents memory exhaustion attacks
 - Uses `http.MaxBytesReader` handler
 
@@ -442,6 +448,9 @@ All operations log to stdout with timestamp:
 - Viper state reset on config load for consistency with reload
 - Rate limiter has periodic cleanup to prevent memory leak
 - Config auto-reload watches the config file's parent directory and debounces 300ms (see Configuration Auto-Reload); the watcher goroutine is stopped and awaited during shutdown
+- `manager.ValidateModelConfig` is the exported structural validation (no file checks); `validateModelConfig` adds model-file existence checks and is used on start
+- `PUT /api/v1/config` writes the file atomically (temp file + rename, preserving permissions) and triggers an immediate reload via `Handler.SetConfigSavedCallback`; the file watcher reloads anyway if the callback fails
+- Web UI embedding is compile-time optional: `go build -tags embedui` includes `server/webui/dist` via `go:embed`; the default build compiles `server/ui_noembed.go` with an empty `embed.FS` so both modes share `server/ui.go`
 
 ### CLI Tool Structure (tools/cli/)
 
@@ -464,3 +473,52 @@ tools/cli/
 - `--skip-tls-verify`: Skip TLS certificate verification (for self-signed certs)
 - `--api-key`: API key for authentication (alternative to env var)
 - `--timeout`: Request timeout in seconds (default: 30)
+
+## Web UI (webui/)
+
+A Svelte 5 + Vite + TypeScript single-page app for viewing and controlling `llm_server_manager` instances on multiple machines ("fleet"). It runs entirely in the browser and talks to each manager's REST API directly; machine URLs and API keys are stored in the browser's localStorage.
+
+### Layout
+
+```
+webui/
+├── index.html, vite.config.ts, tsconfig.json, svelte.config.js, package.json
+├── dist/                      # build output (gitignored)
+└── src/
+    ├── main.ts, App.svelte, app.css
+    ├── lib/
+    │   ├── api.ts             # typed REST client (api-key header, timeouts)
+    │   ├── store.ts           # machine registry + settings (localStorage) + poller
+    │   ├── router.ts          # hash router (#/fleet, #/machine/{id}, #/machine/{id}/config)
+    │   ├── toast.ts, Toasts.svelte, types.ts
+    └── views/
+        ├── Fleet.svelte       # per-machine cards: status dot, running model, stop
+        ├── Machine.svelte     # model list with start/stop
+        ├── ConfigEditor.svelte # raw JSON editor with validation, PUT /api/v1/config
+        └── SettingsDialog.svelte # manage machines, import/export fleet JSON
+```
+
+### Building and embedding
+
+```bash
+# Dev server with hot reload
+cd webui && npm install && npm run dev
+
+# Production build only (dist/)
+make ui            # or: cd webui && npm run build
+
+# Server binary WITHOUT the UI (default; -ui flag is accepted but inert)
+make build         # go build -o llm_server_manager .
+
+# Server binary WITH the UI embedded, served at /ui/ when started with -ui
+make build-ui      # make ui + go build -tags embedui
+```
+
+- Embedding is gated behind the `embedui` build tag (`server/ui_embed.go` / `server/ui_noembed.go`); the assets live in `server/webui/dist/` (populated by `make ui`, gitignored except `.keep`).
+- `server/ui.go` registers `/ui` and `/ui/` routes at `Start()` only when `App.ServeUI` is set (main.go sets it from `-ui`) and the assets were embedded.
+- Vite is configured with `base: './'` so the built app also works from any static host or subdirectory.
+
+### Fleet UI tests
+
+- `handlers/handlers_test.go`: config endpoint behaviour (raw GET, validated atomic PUT with reload callback, rejection cases, large bodies)
+- `server/server_test.go`: body-limit exemption for `PUT /api/v1/config` through the full middleware chain

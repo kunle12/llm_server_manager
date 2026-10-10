@@ -35,5 +35,11 @@ Thumbs.db
 config.json
 !config.json.example
 
+# Web UI build artifacts (populated by `make ui` for -tags embedui builds)
+server/webui/dist/*
+!server/webui/dist/.keep
+webui/node_modules/
+webui/dist/
+
 # Logs
 *.log

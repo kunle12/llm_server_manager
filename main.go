@@ -15,12 +15,14 @@ func main() {
 	var enableLogging bool
 	var daemonMode bool
 	var maxRetries int
+	var enableUI bool
 
 	flag.StringVar(&configPath, "config", "llm_config.json", "path to configuration file")
 	flag.StringVar(&listenAddr, "listen", ":8080", "address to listen on")
 	flag.BoolVar(&enableLogging, "log", false, "enable logging llama-server output to /tmp/llama-server-{model}-{timestamp}.log")
 	flag.BoolVar(&daemonMode, "daemon", false, "run in daemon mode (background)")
 	flag.IntVar(&maxRetries, "retries", 6, "max automatic restarts on crash (0 to disable)")
+	flag.BoolVar(&enableUI, "ui", false, "serve the embedded web UI at /ui/ (requires building with -tags embedui)")
 	flag.Parse()
 
 	if maxRetries < 0 {
@@ -49,6 +51,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Failed to create application: %v\n", err)
 		os.Exit(1)
 	}
+	app.ServeUI = enableUI
 
 	if err := app.Start(listenAddr); err != nil {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
