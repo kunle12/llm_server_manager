@@ -202,6 +202,11 @@ The `manager` package handles llama.cpp process lifecycle:
 - `GET /api/v1/models/running`: Get currently running model
 - `GET /api/v1/config`: Return the raw config file (body is the file itself, not the envelope)
 - `PUT /api/v1/config`: Validate and atomically write a new config (raw JSON body); reloads immediately, with the file watcher as fallback
+- `GET /api/v1/workers`: Worker list with health (coordinator mode; empty when standalone)
+- `GET /api/v1/fleet`: Aggregated view of the local machine (first) and all workers
+- `GET /api/v1/workers/{worker}/models`: A worker's model list (`{worker}` = config name or URL host)
+- `POST /api/v1/workers/{worker}/models/{model}/start`: Start a model on that worker
+- `DELETE /api/v1/workers/{worker}/models/{model}/stop`: Stop a model on that worker
 
 **Features**:
 - CORS support for cross-origin requests
@@ -217,6 +222,7 @@ The `manager` package handles llama.cpp process lifecycle:
   "models": [
     {
       "name": "llama-7b",
+      "alias": "gpt-4o",
       "model_path": "/path/to/model.gguf",
       "context_size": 4096,
       "temperature": 0.7,
@@ -232,12 +238,22 @@ The `manager` package handles llama.cpp process lifecycle:
       "name": "custom-model",
       "launch_cmd": "llama-server -m /path/to/model.gguf -c 4096 --host 0.0.0.0 --port 8082"
     }
-  ]
+  ],
+
+  "workers": [
+    "http://gpu1.local:8080",
+    { "url": "http://gpu2.local:8080", "name": "gpu2", "api_key": "abcdef1234567890" }
+  ],
+
+  "proxy": true
 }
 ```
 
+**Coordinator mode** is enabled by a non-empty `workers` list: the instance can then list, start, and stop models on remote llm_server_manager instances (which run today's binary unchanged). `proxy: true` additionally exposes OpenAI-compatible `/v1/...` routes (Phase 2). Both keys are optional; without them the instance behaves exactly as a standalone manager. See `docs/coordinator-design.md` for the full design.
+
 **ModelConfig Fields**:
 - `name`: Unique identifier (required; entries without a name are skipped — see Development Notes)
+- `alias`: Optional display/routing name, used by the proxy when enabled
 - `model_path`: Path to GGUF model file
 - `context_size`: Maximum context window (optional, omit to use llama.cpp default)
 - `temperature`: Sampling temperature (0.0-2.0)

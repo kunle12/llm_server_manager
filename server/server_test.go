@@ -149,6 +149,87 @@ func TestWatchConfigReloads(t *testing.T) {
 	}
 }
 
+// TestReloadConfigUpdatesWorkers checks that a config reload swaps the
+// worker registry atomically: the coordinator sees the new worker set without
+// a process restart.
+func TestReloadConfigUpdatesWorkers(t *testing.T) {
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "llama-server")
+	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LLAMA_SERVER_PATH", fakeBin)
+
+	configPath := filepath.Join(dir, "llm_config.json")
+	modelsJSON := `{"models":[{"name":"alpha","launch_cmd":"true","threads":1,"temperature":0.7}]`
+	if err := os.WriteFile(configPath, []byte(modelsJSON+`,"workers":["http://w1.local:8080"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app, err := New(configPath, false, 6)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	workers := app.fleet.Workers()
+	if len(workers) != 1 || workers[0].Name != "w1.local" {
+		t.Fatalf("initial workers = %+v", workers)
+	}
+
+	updated := modelsJSON + `,"workers":[{"url":"http://w2.local:8080","name":"second"}]}`
+	if err := os.WriteFile(configPath, []byte(updated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.reloadConfig(); err != nil {
+		t.Fatalf("reloadConfig: %v", err)
+	}
+
+	workers = app.fleet.Workers()
+	if len(workers) != 1 || workers[0].Name != "second" || workers[0].URL != "http://w2.local:8080" {
+		t.Fatalf("workers after reload = %+v", workers)
+	}
+}
+
+// TestFleetEndpointsStandalone checks that the fleet endpoints are registered
+// even without workers configured: /fleet answers with just the local
+// machine, /workers with an empty list.
+func TestFleetEndpointsStandalone(t *testing.T) {
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "llama-server")
+	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LLAMA_SERVER_PATH", fakeBin)
+
+	configPath := filepath.Join(dir, "llm_config.json")
+	if err := os.WriteFile(configPath, []byte(`{"models":[{"name":"alpha","launch_cmd":"true","threads":1,"temperature":0.7}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app, err := New(configPath, false, 6)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	app.router.ServeHTTP(rr, httptest.NewRequest("GET", "/api/v1/workers", nil))
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"workers":[]`) {
+		t.Fatalf("GET /workers = %d, body %s", rr.Code, rr.Body.String())
+	}
+
+	rr = httptest.NewRecorder()
+	app.router.ServeHTTP(rr, httptest.NewRequest("GET", "/api/v1/fleet", nil))
+	if rr.Code != 200 {
+		t.Fatalf("GET /fleet status = %d, body %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"machine":"local"`) {
+		t.Fatalf("GET /fleet body missing the local machine: %s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), `"machine":"`) && strings.Count(rr.Body.String(), `"machine":"`) != 1 {
+		t.Fatalf("standalone /fleet should contain exactly one machine: %s", rr.Body.String())
+	}
+}
+
 // TestEmptyNamedModelsAreSkipped checks that the load and reload paths agree: a
 // model without a name cannot be addressed through the API, so it is dropped
 // rather than indexed under the empty key.

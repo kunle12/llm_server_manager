@@ -4,6 +4,7 @@ import "time"
 
 type ModelConfig struct {
 	Name               string   `json:"name" mapstructure:"name"`
+	Alias              string   `json:"alias,omitempty" mapstructure:"alias,omitempty"`
 	ModelPath          string   `json:"model_path" mapstructure:"model_path"`
 	ContextSize        *int     `json:"context_size,omitempty" mapstructure:"context_size,omitempty"`
 	Temperature        float64  `json:"temperature,omitempty" mapstructure:"temperature,omitempty"`

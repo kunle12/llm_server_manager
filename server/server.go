@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"llamamanager/config"
+	"llamamanager/fleet"
 	"llamamanager/handlers"
 	"llamamanager/manager"
 	"llamamanager/models"
@@ -25,6 +26,7 @@ import (
 type App struct {
 	mgr           *manager.ServerManager
 	handler       *handlers.Handler
+	fleet         *fleet.Registry
 	logger        func(format string, args ...interface{})
 	router        *mux.Router
 	httpSrv       *http.Server
@@ -150,11 +152,17 @@ func New(configPath string, enableLogging bool, maxRetries int) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create server manager: %w", err)
 	}
-	h := handlers.New(mgr, logger, configPath)
+
+	// The worker registry exists even in standalone mode (empty), so the
+	// fleet endpoints answer consistently everywhere.
+	fleetReg := fleet.NewRegistry(cfg.Workers, logger)
+
+	h := handlers.New(mgr, fleetReg, logger, configPath)
 
 	app := &App{
 		mgr:           mgr,
 		handler:       h,
+		fleet:         fleetReg,
 		logger:        logger,
 		enableLogging: enableLogging,
 		configPath:    configPath,
@@ -269,6 +277,8 @@ func (a *App) WatchConfig() {
 }
 
 // reloadConfig reloads the configuration from file and updates the manager
+// and the worker registry. Only configuration changes: a running llama.cpp
+// process is never restarted or stopped by a reload.
 func (a *App) reloadConfig() error {
 	cfg, err := config.Reload(a.configPath)
 	if err != nil {
@@ -276,6 +286,7 @@ func (a *App) reloadConfig() error {
 	}
 
 	a.mgr.ReloadConfigs(indexModels(cfg.Models, a.logger))
+	a.fleet.Reload(cfg.Workers)
 	return nil
 }
 
@@ -309,6 +320,14 @@ func (a *App) setupRouter() {
 	api.HandleFunc("/models/running", a.handler.GetRunningModel).Methods("GET")
 	api.HandleFunc("/config", a.handler.GetConfig).Methods("GET")
 	api.HandleFunc("/config", a.handler.SaveConfig).Methods("PUT")
+
+	// Coordinator mode: control remote instances. Registered always; with no
+	// workers configured the list/fleet views just contain the local machine.
+	api.HandleFunc("/workers", a.handler.ListWorkers).Methods("GET")
+	api.HandleFunc("/workers/{worker}/models", a.handler.WorkerListModels).Methods("GET")
+	api.HandleFunc("/workers/{worker}/models/{model}/start", a.handler.WorkerStartModel).Methods("POST")
+	api.HandleFunc("/workers/{worker}/models/{model}/stop", a.handler.WorkerStopModel).Methods("DELETE")
+	api.HandleFunc("/fleet", a.handler.GetFleet).Methods("GET")
 
 	a.router = r
 }
