@@ -230,6 +230,125 @@ func TestFleetEndpointsStandalone(t *testing.T) {
 	}
 }
 
+// TestProxyWiredWhenEnabled checks the full middleware chain with the proxy
+// on: /v1 routes answer, large prompt bodies are accepted past the 1KB API
+// limit, and unknown /v1 endpoints get OpenAI-format errors.
+func TestProxyWiredWhenEnabled(t *testing.T) {
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "llama-server")
+	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LLAMA_SERVER_PATH", fakeBin)
+
+	configPath := filepath.Join(dir, "llm_config.json")
+	if err := os.WriteFile(configPath, []byte(`{"models":[{"name":"alpha","launch_cmd":"true","threads":1}],"proxy":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app, err := New(configPath, false, 6)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	app.router.ServeHTTP(rr, httptest.NewRequest("GET", "/v1/models", nil))
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"object":"list"`) {
+		t.Fatalf("GET /v1/models = %d, body %s", rr.Code, rr.Body.String())
+	}
+
+	// A 2KB prompt body must pass the general 1KB limit; "alpha" is a
+	// launch_cmd model without --port, so it is configured but not routable.
+	big := strings.Repeat("x", 2048)
+	body := fmt.Sprintf(`{"model":"alpha","messages":[{"role":"user","content":%q}]}`, big)
+	rr = httptest.NewRecorder()
+	app.router.ServeHTTP(rr, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body)))
+	if rr.Code != 404 || !strings.Contains(rr.Body.String(), "model_not_available") {
+		t.Fatalf("POST /v1/chat/completions = %d, body %s", rr.Code, rr.Body.String())
+	}
+
+	rr = httptest.NewRecorder()
+	app.router.ServeHTTP(rr, httptest.NewRequest("GET", "/v1/nope", nil))
+	if rr.Code != 404 || !strings.Contains(rr.Body.String(), "not_found") {
+		t.Fatalf("GET /v1/nope = %d, body %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestProxyDisabledByDefault checks the standalone invariant: without the
+// proxy flag, /v1 paths are plain 404s as before.
+func TestProxyDisabledByDefault(t *testing.T) {
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "llama-server")
+	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LLAMA_SERVER_PATH", fakeBin)
+
+	configPath := filepath.Join(dir, "llm_config.json")
+	if err := os.WriteFile(configPath, []byte(`{"models":[{"name":"alpha","launch_cmd":"true","threads":1}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app, err := New(configPath, false, 6)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	app.router.ServeHTTP(rr, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"alpha"}`)))
+	if rr.Code != 404 {
+		t.Fatalf("POST /v1/chat/completions with proxy off = %d, want 404", rr.Code)
+	}
+}
+
+// TestProxyBearerAuthServerLevel checks auth across both planes: /v1 accepts
+// the coordinator key as Bearer, while /api/v1 keeps requiring the api-key
+// header exactly as before.
+func TestProxyBearerAuthServerLevel(t *testing.T) {
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "llama-server")
+	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LLAMA_SERVER_PATH", fakeBin)
+	t.Setenv("LLM_MANAGER_API_KEY", "coordkey12345678")
+
+	configPath := filepath.Join(dir, "llm_config.json")
+	if err := os.WriteFile(configPath, []byte(`{"models":[{"name":"alpha","launch_cmd":"true","threads":1}],"proxy":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app, err := New(configPath, false, 6)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// /v1 without auth → 401 OpenAI-format error.
+	rr := httptest.NewRecorder()
+	app.router.ServeHTTP(rr, httptest.NewRequest("GET", "/v1/models", nil))
+	if rr.Code != 401 || !strings.Contains(rr.Body.String(), "invalid_api_key") {
+		t.Fatalf("GET /v1/models unauthenticated = %d, body %s", rr.Code, rr.Body.String())
+	}
+
+	// /v1 with Bearer → 200.
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer coordkey12345678")
+	rr = httptest.NewRecorder()
+	app.router.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("GET /v1/models with Bearer = %d, body %s", rr.Code, rr.Body.String())
+	}
+
+	// The control plane keeps its own contract: Bearer alone is not enough.
+	req = httptest.NewRequest("GET", "/api/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer coordkey12345678")
+	rr = httptest.NewRecorder()
+	app.router.ServeHTTP(rr, req)
+	if rr.Code != 401 {
+		t.Fatalf("GET /api/v1/models with Bearer only = %d, want 401 (control-plane auth unchanged)", rr.Code)
+	}
+}
+
 // TestEmptyNamedModelsAreSkipped checks that the load and reload paths agree: a
 // model without a name cannot be addressed through the API, so it is dropped
 // rather than indexed under the empty key.

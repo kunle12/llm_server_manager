@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"llamamanager/handlers"
 	"llamamanager/manager"
 	"llamamanager/models"
+	"llamamanager/proxy"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/gorilla/mux"
@@ -27,6 +29,8 @@ type App struct {
 	mgr           *manager.ServerManager
 	handler       *handlers.Handler
 	fleet         *fleet.Registry
+	proxy         *proxy.Router
+	proxyEnabled  bool
 	logger        func(format string, args ...interface{})
 	router        *mux.Router
 	httpSrv       *http.Server
@@ -159,10 +163,21 @@ func New(configPath string, enableLogging bool, maxRetries int) (*App, error) {
 
 	h := handlers.New(mgr, fleetReg, logger, configPath)
 
+	// The /v1 proxy exists only when enabled: with proxy off, /v1 paths 404
+	// exactly as before. Toggling it via config reload requires a restart
+	// (route registration happens once, below).
+	var v1proxy *proxy.Router
+	if bool(cfg.Proxy) {
+		v1proxy = proxy.New(mgr, fleetReg, h.APIKey(), h.AuthEnabled(), logger)
+		logger("Proxy enabled: /v1 routes active")
+	}
+
 	app := &App{
 		mgr:           mgr,
 		handler:       h,
 		fleet:         fleetReg,
+		proxy:         v1proxy,
+		proxyEnabled:  bool(cfg.Proxy),
 		logger:        logger,
 		enableLogging: enableLogging,
 		configPath:    configPath,
@@ -287,6 +302,10 @@ func (a *App) reloadConfig() error {
 
 	a.mgr.ReloadConfigs(indexModels(cfg.Models, a.logger))
 	a.fleet.Reload(cfg.Workers)
+
+	if bool(cfg.Proxy) != a.proxyEnabled {
+		a.logger("Warning: the 'proxy' setting changed via config reload; restart the process to apply")
+	}
 	return nil
 }
 
@@ -301,12 +320,15 @@ func (a *App) setupRouter() {
 
 	// Limit request bodies: 1KB is ample for the control API; the config
 	// endpoint accepts up to 1MB since a config file with several models
-	// easily exceeds 1KB.
+	// easily exceeds 1KB; /v1 prompts may be large (10MB).
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			limit := int64(1024)
-			if r.URL.Path == "/api/v1/config" {
+			switch {
+			case r.URL.Path == "/api/v1/config":
 				limit = 1 << 20
+			case strings.HasPrefix(r.URL.Path, "/v1/"):
+				limit = proxy.MaxBodyBytes
 			}
 			maxRequestSize(limit)(next).ServeHTTP(w, r)
 		})
@@ -329,16 +351,32 @@ func (a *App) setupRouter() {
 	api.HandleFunc("/workers/{worker}/models/{model}/stop", a.handler.WorkerStopModel).Methods("DELETE")
 	api.HandleFunc("/fleet", a.handler.GetFleet).Methods("GET")
 
+	// OpenAI-compatible proxy (coordinator config, "proxy": true).
+	if a.proxy != nil {
+		v1 := r.PathPrefix("/v1").Subrouter()
+		v1.Use(a.proxy.RequireAuth)
+		v1.HandleFunc("/models", a.proxy.ListModels).Methods("GET")
+		v1.HandleFunc("/chat/completions", a.proxy.HandleGeneration).Methods("POST")
+		v1.HandleFunc("/completions", a.proxy.HandleGeneration).Methods("POST")
+		v1.HandleFunc("/embeddings", a.proxy.HandleGeneration).Methods("POST")
+		v1.NotFoundHandler = http.HandlerFunc(a.proxy.NotFound)
+	}
+
 	a.router = r
 }
 
 func (a *App) Start(listenAddr string) error {
 	a.httpSrv = &http.Server{
-		Addr:         listenAddr,
-		Handler:      a.router,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:    listenAddr,
+		Handler: a.router,
+		// ReadHeaderTimeout keeps slowloris protection on headers. Read and
+		// write timeouts are disabled: LLM generations stream for minutes and
+		// the old 15s WriteTimeout truncated every long response. Control
+		// handlers stay guarded by body caps and the rate limiter instead.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       0,
+		WriteTimeout:      0,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	a.registerUIRoutes()

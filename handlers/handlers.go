@@ -330,6 +330,13 @@ func (h *Handler) SetConfigSavedCallback(fn func() error) {
 	h.onConfigSaved = fn
 }
 
+// APIKey returns the configured coordinator key ("" when auth is disabled).
+// The proxy reuses it for /v1 Bearer authentication.
+func (h *Handler) APIKey() string { return h.apiKey }
+
+// AuthEnabled reports whether api-key authentication is active.
+func (h *Handler) AuthEnabled() bool { return h.enabled }
+
 // GetConfig returns the raw config file so clients can edit it and PUT it
 // back verbatim. Unlike the other endpoints the body is the file itself, not
 // an APIResponse envelope.
