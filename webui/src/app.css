@@ -134,7 +134,8 @@ main {
   flex: none;
 }
 
-.dot.running {
+.dot.running,
+.dot.online {
   background: var(--ok);
 }
 

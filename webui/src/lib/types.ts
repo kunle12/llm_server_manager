@@ -2,6 +2,7 @@
 
 export interface ModelConfig {
   name: string
+  alias?: string
   model_path?: string
   context_size?: number
   temperature?: number
@@ -59,4 +60,26 @@ export interface Settings {
   pollMs: number
   paused: boolean
   theme: 'light' | 'dark'
+}
+
+/** A model a machine is currently running, as reported by the fleet view. */
+export interface RunningInfo {
+  name: string
+  alias?: string
+  status: string
+  start_time?: string
+  port: number
+}
+
+/**
+ * One machine in a coordinator's fleet view: the coordinator itself
+ * ("local") first, then its workers. Only fleet-capable managers answer this.
+ */
+export interface FleetMachine {
+  machine: string
+  url?: string
+  status: 'online' | 'offline'
+  running?: RunningInfo | null
+  models: ModelItem[]
+  error?: string
 }

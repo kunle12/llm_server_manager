@@ -107,6 +107,7 @@
           <tr class:active={item.active}>
             <td>
               {item.name}
+              {#if item.alias}<span class="alias" title="proxy alias">→ {item.alias}</span>{/if}
               {#if item.active}<span class="badge running">running</span>{/if}
             </td>
             <td class="path" title={item.launch_cmd || item.model_path}>
@@ -165,5 +166,11 @@
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
+  }
+
+  .alias {
+    color: var(--muted);
+    font-size: 0.82rem;
+    margin-left: 0.35rem;
   }
 </style>

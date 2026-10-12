@@ -1,4 +1,4 @@
-import type { APIResponse, Machine, ModelItem, RunningServer } from './types'
+import type { APIResponse, FleetMachine, Machine, ModelItem, RunningServer } from './types'
 
 export class ApiError extends Error {
   status: number
@@ -65,6 +65,33 @@ export async function listModels(m: Machine): Promise<ModelItem[]> {
   const body = await request(m, '/api/v1/models')
   const data = body.data as { models?: ModelItem[] } | undefined
   return data?.models ?? []
+}
+
+/**
+ * GET /api/v1/fleet — the coordinator's aggregated view (local machine first,
+ * then workers). 404s (legacy standalone binary) surface as ApiError so
+ * callers can fall back to per-machine polling.
+ */
+export async function getFleet(m: Machine): Promise<FleetMachine[]> {
+  const body = await request(m, '/api/v1/fleet')
+  const data = body.data as { machines?: FleetMachine[] } | undefined
+  return data?.machines ?? []
+}
+
+/** POST /api/v1/workers/{worker}/models/{name}/start */
+export async function workerStartModel(m: Machine, worker: string, name: string): Promise<APIResponse> {
+  return request(m, `/api/v1/workers/${encodeURIComponent(worker)}/models/${encodeURIComponent(name)}/start`, {
+    method: 'POST',
+    timeout: WRITE_TIMEOUT,
+  })
+}
+
+/** DELETE /api/v1/workers/{worker}/models/{name}/stop */
+export async function workerStopModel(m: Machine, worker: string, name: string): Promise<APIResponse> {
+  return request(m, `/api/v1/workers/${encodeURIComponent(worker)}/models/${encodeURIComponent(name)}/stop`, {
+    method: 'DELETE',
+    timeout: WRITE_TIMEOUT,
+  })
 }
 
 /** POST /api/v1/models/{name}/start */

@@ -82,6 +82,7 @@ func (r *RootCommand) AddCommands() {
 		NewStartCommand(r).Cmd(),
 		NewStopCommand(r).Cmd(),
 		NewStatusCommand(r).Cmd(),
+		NewFleetCommand(r).Cmd(),
 		NewVersionCommand().Cmd(),
 	)
 }

@@ -1,6 +1,6 @@
 import { get, writable } from 'svelte/store'
-import { getRunning } from './api'
-import type { Machine, MachineStatus, Settings } from './types'
+import { ApiError, getFleet, getRunning } from './api'
+import type { FleetMachine, Machine, MachineStatus, Settings } from './types'
 
 const MACHINES_KEY = 'llm-fleet.machines.v1'
 const SETTINGS_KEY = 'llm-fleet.settings.v1'
@@ -35,15 +35,51 @@ settings.subscribe((v) => localStorage.setItem(SETTINGS_KEY, JSON.stringify(v)))
 /** Latest known status per machine id. */
 export const statuses = writable<Record<string, MachineStatus>>({})
 
-/** Refresh one machine's running-model status. Never throws. */
+/**
+ * Latest fleet view per machine id, from GET /api/v1/fleet. `null` means the
+ * machine answered but has no fleet capability (legacy/standalone binary) —
+ * those fall back to the single-card view. `undefined` = not probed yet.
+ */
+export const fleetViews = writable<Record<string, FleetMachine[] | null>>({})
+
+/** Refresh one machine's fleet view and running-model status. Never throws. */
 export async function refreshMachine(m: Machine): Promise<void> {
   statuses.update((s) => (s[m.id] ? s : { ...s, [m.id]: { state: 'checking' } }))
+
+  try {
+    const entries = await getFleet(m)
+    // Fleet-capable: render the aggregated view and keep the plain status
+    // fresh for the machine detail page.
+    fleetViews.update((s) => ({ ...s, [m.id]: entries }))
+    const local = entries.find((e) => e.machine === 'local')
+    statuses.update((s) => ({
+      ...s,
+      [m.id]: local?.running
+        ? { state: 'running', model: local.running.alias || local.running.name, startTime: local.running.start_time }
+        : { state: 'idle' },
+    }))
+    return
+  } catch (e) {
+    fleetViews.update((s) => ({ ...s, [m.id]: null }))
+    const apiErr = e instanceof ApiError ? e : null
+    // 404/405: legacy binary without the fleet endpoints — fall through to
+    // the legacy getRunning probe. Anything else (offline, auth, timeout) is
+    // already the machine's state; surface it directly.
+    if (!apiErr || (apiErr.status !== 404 && apiErr.status !== 405)) {
+      statuses.update((s) => ({
+        ...s,
+        [m.id]: { state: 'offline', error: e instanceof Error ? e.message : String(e) },
+      }))
+      return
+    }
+  }
+
   try {
     const running = await getRunning(m)
     statuses.update((s) => ({
       ...s,
       [m.id]: running
-        ? { state: 'running', model: running.model_config.name, startTime: running.start_time }
+        ? { state: 'running', model: running.model_config.alias || running.model_config.name, startTime: running.start_time }
         : { state: 'idle' },
     }))
   } catch (e) {

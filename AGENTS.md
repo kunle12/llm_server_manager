@@ -56,6 +56,13 @@ nohup ./llm_server_manager -config=config.json -listen=:8080 > manager.log 2>&1 
 # Check running model
 ./llm-cli status
 
+# Show the coordinator fleet view (local machine + workers)
+./llm-cli fleet
+
+# Start/stop a model on a specific worker of a coordinator
+./llm-cli start llama-7b --worker gpu2
+./llm-cli stop llama-7b --worker gpu2
+
 # Connect to remote server
 ./llm-cli -s http://192.168.1.100:8080 list
 
@@ -207,6 +214,8 @@ The `manager` package handles llama.cpp process lifecycle:
 - `GET /api/v1/workers/{worker}/models`: A worker's model list (`{worker}` = config name or URL host)
 - `POST /api/v1/workers/{worker}/models/{model}/start`: Start a model on that worker
 - `DELETE /api/v1/workers/{worker}/models/{model}/stop`: Stop a model on that worker
+- `GET /v1/models`: OpenAI-format model list (proxy mode only; only running models, alias when set)
+- `POST /v1/chat/completions`, `POST /v1/completions`, `POST /v1/embeddings`: Proxied to the machine running the requested model (SSE streaming supported; errors in OpenAI format)
 
 **Features**:
 - CORS support for cross-origin requests
@@ -494,6 +503,8 @@ tools/cli/
 
 A Svelte 5 + Vite + TypeScript single-page app for viewing and controlling `llm_server_manager` instances on multiple machines ("fleet"). It runs entirely in the browser and talks to each manager's REST API directly; machine URLs and API keys are stored in the browser's localStorage.
 
+**Coordinator support:** the fleet view probes `GET /api/v1/fleet` first; when a machine answers it, one card per fleet machine (local + workers) is rendered, with start/stop routed to the right endpoints (local vs worker-scoped) — this is the client-side "start anywhere" flow. Machines that answer 404 (legacy binary) fall back to the single-card view. Model aliases are shown as `name → alias` where relevant.
+
 ### Layout
 
 ```
@@ -508,8 +519,8 @@ webui/
     │   ├── router.ts          # hash router (#/fleet, #/machine/{id}, #/machine/{id}/config)
     │   ├── toast.ts, Toasts.svelte, types.ts
     └── views/
-        ├── Fleet.svelte       # per-machine cards: status dot, running model, stop
-        ├── Machine.svelte     # model list with start/stop
+        ├── Fleet.svelte       # per-machine cards; fleet view for coordinators (local + workers, start/stop)
+        ├── Machine.svelte     # model list with start/stop (alias shown when set)
         ├── ConfigEditor.svelte # raw JSON editor with validation, PUT /api/v1/config
         └── SettingsDialog.svelte # manage machines, import/export fleet JSON
 ```
@@ -536,5 +547,5 @@ make build-ui      # make ui + go build -tags embedui
 
 ### Fleet UI tests
 
-- `handlers/handlers_test.go`: config endpoint behaviour (raw GET, validated atomic PUT with reload callback, rejection cases, large bodies)
-- `server/server_test.go`: body-limit exemption for `PUT /api/v1/config` through the full middleware chain
+- `handlers/handlers_test.go`: config endpoint behaviour (raw GET, validated atomic PUT with reload callback, rejection cases, large bodies); fleet/worker endpoints with fake workers (online/offline/401 pass-through, 502 on transport failures)
+- `server/server_test.go`: body-limit exemption for `PUT /api/v1/config` through the full middleware chain; proxy wiring (`/v1` routes with Bearer auth, body-limit exemption, OpenAI-format 404s, disabled-by-default)

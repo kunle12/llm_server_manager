@@ -21,15 +21,27 @@ func (c *StopCommand) Cmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "stop <model>",
 		Short: "Stop a running model server",
-		Args:  cobra.ExactArgs(1),
-		RunE:  c.run,
+		Long: `Stop a running model server.
+
+On a coordinator instance, pass --worker to stop a model on a remote worker
+(by worker name or host) instead of locally.`,
+		Args: cobra.ExactArgs(1),
+		RunE: c.run,
 	}
+	cmd.Flags().String("worker", "", "stop the model on this worker of a coordinator (name or host)")
 	return cmd
 }
 
 func (c *StopCommand) run(cmd *cobra.Command, args []string) error {
 	modelName := args[0]
-	path := fmt.Sprintf("/api/v1/models/%s/stop", modelName)
+
+	worker, _ := cmd.Flags().GetString("worker")
+	var path string
+	if worker != "" {
+		path = fmt.Sprintf("/api/v1/workers/%s/models/%s/stop", worker, modelName)
+	} else {
+		path = fmt.Sprintf("/api/v1/models/%s/stop", modelName)
+	}
 
 	resp, err := c.root.DoRequest(http.MethodDelete, path, nil)
 	if err != nil {
