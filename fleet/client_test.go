@@ -354,6 +354,44 @@ func TestSnapshotCacheDisabledWithZeroTTL(t *testing.T) {
 	}
 }
 
+// TestCanceledProbeNotCached checks that a probe aborted by the caller's own
+// request context is not cached: the next caller must see a fresh probe, not
+// a poisoned "offline" entry.
+func TestCanceledProbeNotCached(t *testing.T) {
+	var hits int32
+	var once sync.Once
+	started := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		once.Do(func() { close(started) })
+		time.Sleep(150 * time.Millisecond)
+		writeModels(t, w)
+	}))
+	defer ts.Close()
+
+	reg := NewRegistry([]config.WorkerConfig{{URL: ts.URL}}, nil)
+	reg.cacheTTL = time.Minute
+
+	w := reg.Workers()[0]
+
+	slowCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	snap := reg.Snapshot(slowCtx, w)
+	if snap.Status != StatusOffline {
+		t.Fatalf("slow probe should read offline, got %s", snap.Status)
+	}
+
+	<-started
+	// The canceled probe must not be cached: this fresh probe hits the server.
+	fresh := reg.Snapshot(context.Background(), w)
+	if fresh.Status != StatusOnline {
+		t.Fatalf("fresh probe status = %s, want online", fresh.Status)
+	}
+	if n := atomic.LoadInt32(&hits); n != 2 {
+		t.Fatalf("probe hits = %d, want 2 (canceled probe must not be cached)", n)
+	}
+}
+
 func TestRegistryConcurrentAccess(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeModels(t, w)

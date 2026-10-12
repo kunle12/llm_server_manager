@@ -116,6 +116,11 @@ func (r *Registry) load(specs []config.WorkerConfig) {
 		if seen[w.Name] {
 			r.logger("Warning: worker name %q is duplicated; the first entry wins for name lookup", w.Name)
 		}
+		if w.Name == LocalMachine {
+			// "local" is the coordinator's own machine name in fleet views
+			// and routing; a worker claiming it makes views ambiguous.
+			r.logger("Warning: worker name %q is reserved for the coordinator itself; choose a different name", w.Name)
+		}
 		seen[w.Name] = true
 		workers = append(workers, w)
 	}
@@ -188,9 +193,12 @@ func (r *Registry) Snapshot(ctx context.Context, w *Worker) WorkerSnapshot {
 		r.cacheMu.Unlock()
 	}
 
-	snap := r.probe(ctx, w)
+	snap, cacheable := r.probe(ctx, w)
 
-	if r.cacheTTL > 0 {
+	// A probe cut short by the caller's own request context says nothing
+	// about worker health — caching it would report a false "offline" to the
+	// next caller.
+	if cacheable && r.cacheTTL > 0 {
 		r.cacheMu.Lock()
 		r.cache[w.URL] = cacheEntry{snapshot: snap, at: time.Now()}
 		r.cacheMu.Unlock()
@@ -198,16 +206,20 @@ func (r *Registry) Snapshot(ctx context.Context, w *Worker) WorkerSnapshot {
 	return snap
 }
 
-func (r *Registry) probe(ctx context.Context, w *Worker) WorkerSnapshot {
+func (r *Registry) probe(ctx context.Context, w *Worker) (WorkerSnapshot, bool) {
 	snap := WorkerSnapshot{Worker: w, Status: StatusOffline}
 	items, err := w.ListModels(ctx)
 	if err != nil {
 		snap.Error = describeWorkerError(err)
-		return snap
+		// Cacheable only when the caller's context is still healthy — i.e.
+		// the failure came from the worker side (its own read timeout, a
+		// real refusal). A caller deadline/cancellation says nothing about
+		// worker health and must not be cached.
+		return snap, ctx.Err() == nil
 	}
 	snap.Status = StatusOnline
 	snap.Models = items
-	return snap
+	return snap, true
 }
 
 // describeWorkerError turns transport/auth failures into short, actionable
