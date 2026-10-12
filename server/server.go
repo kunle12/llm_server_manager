@@ -129,13 +129,23 @@ func maxRequestSize(maxBytes int64) func(http.Handler) http.Handler {
 // indexModels indexes models by name. Entries without a name are skipped, with
 // a warning, since they can never be addressed through the API. The load and
 // reload paths share this so they cannot disagree about the model set.
+// Duplicate aliases are warned about (not rejected): they resolve by
+// first-match in the proxy routing table.
 func indexModels(list []models.ModelConfig, logger func(format string, args ...interface{})) map[string]*models.ModelConfig {
 	indexed := make(map[string]*models.ModelConfig, len(list))
+	aliases := make(map[string]string)
 	for i := range list {
 		m := &list[i]
 		if m.Name == "" {
 			logger("Warning: skipping model with empty name (index %d)", i)
 			continue
+		}
+		if m.Alias != "" {
+			if prev, ok := aliases[m.Alias]; ok {
+				logger("Warning: alias %q is declared by both %q and %q; the first declaration wins", m.Alias, prev, m.Name)
+			} else {
+				aliases[m.Alias] = m.Name
+			}
 		}
 		indexed[m.Name] = m
 	}

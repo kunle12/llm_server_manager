@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"llamamanager/models"
 )
 
 // TestConfigEndpointBodyLimit checks that the config endpoint accepts bodies
@@ -346,6 +348,58 @@ func TestProxyBearerAuthServerLevel(t *testing.T) {
 	app.router.ServeHTTP(rr, req)
 	if rr.Code != 401 {
 		t.Fatalf("GET /api/v1/models with Bearer only = %d, want 401 (control-plane auth unchanged)", rr.Code)
+	}
+}
+
+// TestDuplicateAliasWarns checks the load-time warning for two models
+// declaring the same alias (resolves by first-match; not a rejection).
+func TestDuplicateAliasWarns(t *testing.T) {
+	list := []models.ModelConfig{
+		{Name: "a", Alias: "shared"},
+		{Name: "b", Alias: "shared"},
+		{Name: "c", Alias: "unique"},
+	}
+	var warnings []string
+	indexModels(list, func(format string, args ...interface{}) {
+		warnings = append(warnings, fmt.Sprintf(format, args...))
+	})
+
+	if len(warnings) != 1 || !strings.Contains(warnings[0], `"a" and "b"`) {
+		t.Fatalf("warnings = %v, want exactly one duplicate-alias warning mentioning a and b", warnings)
+	}
+}
+
+// TestAliasSurvivesReload checks that aliases are preserved across the reload
+// path identically to the load path.
+func TestAliasSurvivesReload(t *testing.T) {
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "llama-server")
+	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LLAMA_SERVER_PATH", fakeBin)
+
+	configPath := filepath.Join(dir, "llm_config.json")
+	if err := os.WriteFile(configPath, []byte(`{"models":[{"name":"alpha","alias":"gpt-x","launch_cmd":"true","threads":1}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app, err := New(configPath, false, 6)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := app.mgr.ListModels()["alpha"].Alias; got != "gpt-x" {
+		t.Fatalf("alias after load = %q", got)
+	}
+
+	if err := os.WriteFile(configPath, []byte(`{"models":[{"name":"beta","alias":"gpt-y","launch_cmd":"true","threads":1}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.reloadConfig(); err != nil {
+		t.Fatalf("reloadConfig: %v", err)
+	}
+	if got := app.mgr.ListModels()["beta"].Alias; got != "gpt-y" {
+		t.Fatalf("alias after reload = %q", got)
 	}
 }
 
