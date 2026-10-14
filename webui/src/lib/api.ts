@@ -78,6 +78,13 @@ export async function getFleet(m: Machine): Promise<FleetMachine[]> {
   return data?.machines ?? []
 }
 
+/** GET /api/v1/proxy — runtime proxy state, or null if unsupported. */
+export async function getProxy(m: Machine): Promise<boolean | null> {
+  const body = await request(m, '/api/v1/proxy')
+  const data = body.data as { enabled?: boolean } | undefined
+  return typeof data?.enabled === 'boolean' ? data.enabled : null
+}
+
 /** POST /api/v1/workers/{worker}/models/{name}/start */
 export async function workerStartModel(m: Machine, worker: string, name: string): Promise<APIResponse> {
   return request(m, `/api/v1/workers/${encodeURIComponent(worker)}/models/${encodeURIComponent(name)}/start`, {
@@ -111,18 +118,26 @@ export async function stopModel(m: Machine, name: string): Promise<APIResponse> 
 }
 
 /**
- * GET /api/v1/config — returns the raw config file text so it can be edited
- * verbatim. Unlike the other endpoints this one returns the file body, not an
- * APIResponse envelope.
+ * GET /api/v1/config — returns the raw config file text plus its ETag so the
+ * caller can (a) poll for external changes via If-None-Match and (b) send the
+ * ETag back as If-Match on save to detect conflicts.
  */
-export async function getConfigText(m: Machine): Promise<string> {
+export interface ConfigSnapshot {
+  notModified: boolean
+  text: string
+  etag: string
+}
+
+export async function fetchConfig(m: Machine, ifNoneMatch?: string): Promise<ConfigSnapshot> {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), READ_TIMEOUT)
   try {
-    const res = await fetch(url(m, '/api/v1/config'), {
-      headers: { 'api-key': m.apiKey },
-      signal: ctrl.signal,
-    })
+    const headers: Record<string, string> = { 'api-key': m.apiKey }
+    if (ifNoneMatch) headers['If-None-Match'] = ifNoneMatch
+    const res = await fetch(url(m, '/api/v1/config'), { headers, signal: ctrl.signal })
+    if (res.status === 304) {
+      return { notModified: true, text: '', etag: ifNoneMatch ?? '' }
+    }
     if (!res.ok) {
       let msg = `HTTP ${res.status}`
       try {
@@ -132,7 +147,7 @@ export async function getConfigText(m: Machine): Promise<string> {
       }
       throw new ApiError(msg, res.status)
     }
-    return await res.text()
+    return { notModified: false, text: await res.text(), etag: res.headers.get('ETag') ?? '' }
   } catch (e) {
     throw wrapError(e)
   } finally {
@@ -140,12 +155,38 @@ export async function getConfigText(m: Machine): Promise<string> {
   }
 }
 
-/** PUT /api/v1/config — body is the raw config JSON. */
-export async function saveConfigText(m: Machine, text: string): Promise<APIResponse> {
-  return request(m, '/api/v1/config', {
-    method: 'PUT',
-    timeout: WRITE_TIMEOUT,
-    headers: { 'Content-Type': 'application/json' },
-    body: text,
-  })
+/**
+ * PUT /api/v1/config — body is the raw config JSON. `ifMatch` is the ETag of
+ * the version being edited ("*" to force an overwrite). A 409 means the file
+ * changed on disk; it surfaces as an ApiError with status 409.
+ */
+export async function saveConfig(
+  m: Machine,
+  text: string,
+  ifMatch: string,
+): Promise<{ message: string; etag: string }> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), WRITE_TIMEOUT)
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', 'api-key': m.apiKey }
+    if (ifMatch) headers['If-Match'] = ifMatch
+    const res = await fetch(url(m, '/api/v1/config'), {
+      method: 'PUT',
+      headers,
+      body: text,
+      signal: ctrl.signal,
+    })
+    let body: APIResponse | null = null
+    try {
+      body = await res.json()
+    } catch {
+      // non-JSON body (proxy error page etc.)
+    }
+    if (!res.ok) throw new ApiError(body?.message ?? `HTTP ${res.status}`, res.status)
+    return { message: body?.message ?? 'Config saved', etag: res.headers.get('ETag') ?? '' }
+  } catch (e) {
+    throw wrapError(e)
+  } finally {
+    clearTimeout(timer)
+  }
 }

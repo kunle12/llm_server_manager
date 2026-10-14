@@ -207,14 +207,15 @@ The `manager` package handles llama.cpp process lifecycle:
 - `POST /api/v1/models/{model}/start`: Start a model server
 - `DELETE /api/v1/models/{model}/stop`: Stop a model server
 - `GET /api/v1/models/running`: Get currently running model
-- `GET /api/v1/config`: Return the raw config file (body is the file itself, not the envelope)
-- `PUT /api/v1/config`: Validate and atomically write a new config (raw JSON body); reloads immediately, with the file watcher as fallback
+- `GET /api/v1/config`: Return the raw config file (body is the file itself, not the envelope); response carries an `ETag` (content hash) and supports conditional `If-None-Match` (304)
+- `PUT /api/v1/config`: Validate and atomically write a new config (raw JSON body); reloads immediately, with the file watcher as fallback. Honours `If-Match` for optimistic concurrency — a stale validator returns `409 Conflict` (and the current `ETag`) instead of overwriting; `If-Match` omitted keeps the old unconditional behaviour
 - `GET /api/v1/workers`: Worker list with health (coordinator mode; empty when standalone)
 - `GET /api/v1/fleet`: Aggregated view of the local machine (first) and all workers
 - `GET /api/v1/workers/{worker}/models`: A worker's model list (`{worker}` = config name or URL host)
 - `POST /api/v1/workers/{worker}/models/{model}/start`: Start a model on that worker
 - `DELETE /api/v1/workers/{worker}/models/{model}/stop`: Stop a model on that worker
 - `GET /v1/models`: OpenAI-format model list (proxy mode only; only running models, alias when set)
+- `GET /api/v1/proxy`: Runtime proxy state (`{enabled}`) so the UI can show/toggle it
 - `POST /v1/chat/completions`, `POST /v1/completions`, `POST /v1/embeddings`: Proxied to the machine running the requested model (SSE streaming supported; errors in OpenAI format)
 
 **Features**:
@@ -258,7 +259,7 @@ The `manager` package handles llama.cpp process lifecycle:
 }
 ```
 
-**Coordinator mode** is enabled by a non-empty `workers` list: the instance can then list, start, and stop models on remote llm_server_manager instances (which run today's binary unchanged). `proxy: true` additionally exposes OpenAI-compatible `/v1/...` routes (Phase 2). Both keys are optional; without them the instance behaves exactly as a standalone manager. See `docs/coordinator-design.md` for the full design.
+**Coordinator mode** is enabled by a non-empty `workers` list: the instance can then list, start, and stop models on remote llm_server_manager instances (which run today's binary unchanged). `proxy: true` additionally exposes OpenAI-compatible `/v1/...` routes (Phase 2). Both keys are optional; without them the instance behaves exactly as a standalone manager. The `proxy` key can be toggled at runtime (web UI switch, or editing the config): the `/v1` routes are always registered and gated by an in-memory flag, so a reload applies the change without a restart; when off they answer the proxy's OpenAI-format 404. See `docs/coordinator-design.md` for the full design.
 
 **ModelConfig Fields**:
 - `name`: Unique identifier (required; entries without a name are skipped — see Development Notes)
@@ -366,7 +367,7 @@ Models configured with `launch_cmd` bypass this construction entirely and are ru
 ### Error Handling
 
 The application handles:
-- Configuration errors (missing file, invalid JSON, empty models)
+- Configuration errors (missing file, invalid JSON)
 - Duplicate server prevention
 - Model not found errors
 - Wrong model stop attempts
@@ -467,14 +468,17 @@ All operations log to stdout with timestamp:
 - The `host` field does not exist in config (hardcoded to 0.0.0.0 in manager/manager.go:343)
 - Tests live in server/server_test.go: config auto-reload across `replace`/`atomic`/`inplace` save styles (race-guarded, run with `go test -race`), and skipping of nameless models on both the load and reload paths
 - Model config validation: Name required, ModelPath required, Threads > 0, Temperature 0.0-2.0
-- Models without a `name` are skipped when the config is indexed (`indexModels`), identically on load and reload; a config with no named models is rejected at startup
+- Models without a `name` are skipped when the config is indexed (`indexModels`), identically on load and reload. A config with no (named) models is valid: the server starts anyway and logs a warning, so models can be added later via config reload or the UI; `PUT /api/v1/config` likewise accepts an empty `models` list
 - Cancellation uses `context.Context` (not chan chan struct{}) to avoid deadlock
 - Log file handle properly closed after `cmd.Wait()` before retry/exit
 - Viper state reset on config load for consistency with reload
 - Rate limiter has periodic cleanup to prevent memory leak
 - Config auto-reload watches the config file's parent directory and debounces 300ms (see Configuration Auto-Reload); the watcher goroutine is stopped and awaited during shutdown
 - `manager.ValidateModelConfig` is the exported structural validation (no file checks); `validateModelConfig` adds model-file existence checks and is used on start
-- `PUT /api/v1/config` writes the file atomically (temp file + rename, preserving permissions) and triggers an immediate reload via `Handler.SetConfigSavedCallback`; the file watcher reloads anyway if the callback fails
+- `PUT /api/v1/config` writes the file atomically (temp file + rename, preserving permissions) and triggers an immediate reload via `Handler.SetConfigSavedCallback`; the file watcher reloads anyway if the callback fails. Optimistic concurrency: `GET` returns a content-hash `ETag`, `PUT` accepts `If-Match` and returns `409` (with the current `ETag`) when it is stale, so the editor cannot silently clobber a change made elsewhere. `If-Match` is optional for backward compatibility. `Handler.saveMu` serialises the check-and-write so concurrent saves cannot both pass the precondition
+- `App.reloadMu` serialises `reloadConfig`: both the PUT callback and the file watcher can invoke it, and `config.Reload` drives the package-global `viper` singleton, which is not safe for concurrent use
+- `server.Validate` (with `manager.CheckLlamaServer`) is the lightweight startup check used by `main.validateConfigPath`: it loads the config and verifies `llama-server` without constructing the whole `App`, so startup logs are emitted once instead of twice
+- The `/v1` proxy routes are always registered and gated by `App.proxyEnabled` (an `atomic.Bool`), so toggling the `proxy` config key applies live on reload without a restart; when off, `/v1` answers `proxy.Disabled` (OpenAI-format 404). `GET /api/v1/proxy` reports the runtime state
 - Web UI embedding is compile-time optional: `go build -tags embedui` includes `server/webui/dist` via `go:embed`; the default build compiles `server/ui_noembed.go` with an empty `embed.FS` so both modes share `server/ui.go`
 
 ### CLI Tool Structure (tools/cli/)
@@ -494,16 +498,24 @@ tools/cli/
 ```
 
 **CLI Flags**:
-- `-s, --server`: Server URL (default: `http://localhost:8080`)
+- `-s, --server`: Server URL (default: `LLAMA_SERVER_URL` env, else `http://localhost:8080`)
 - `--skip-tls-verify`: Skip TLS certificate verification (for self-signed certs)
-- `--api-key`: API key for authentication (alternative to env var)
-- `--timeout`: Request timeout in seconds (default: 30)
+- `-j, --json`: JSON output
+- `start`/`stop` also accept `--worker <name-or-host>` for coordinator mode
+
+Authentication is read from the `LLM_MANAGER_API_KEY` environment variable (there is no `--api-key` flag); the request timeout is the fixed `30s` constant in `tools/cli/commands/root.go`.
 
 ## Web UI (webui/)
 
 A Svelte 5 + Vite + TypeScript single-page app for viewing and controlling `llm_server_manager` instances on multiple machines ("fleet"). It runs entirely in the browser and talks to each manager's REST API directly; machine URLs and API keys are stored in the browser's localStorage.
 
 **Coordinator support:** the fleet view probes `GET /api/v1/fleet` first; when a machine answers it, one card per fleet machine (local + workers) is rendered, with start/stop routed to the right endpoints (local vs worker-scoped) — this is the client-side "start anywhere" flow. Machines that answer 404 (legacy binary) fall back to the single-card view. Model aliases are shown as `name → alias` where relevant.
+
+**Local auto-attach:** on first load with an empty machine list, the app probes the origin that served it (`GET /api/v1/models`, 3s timeout) and, when that origin answers with the manager JSON envelope (200, or 401 when a key is required), seeds a "This machine" entry for it. A static host or the Vite dev server returns HTML, which fails the check, so those setups stay manual. Machines are still fully editable/removable in Settings.
+
+**Config editing / concurrent changes:** the editor loads the file with its `ETag` and polls (`If-None-Match`, on the same interval as the rest of the UI). A clean editor silently follows edits made on disk; a dirty editor shows a banner with *Reload from disk* / *Keep editing*. Saves send `If-Match`, so if the file changed underneath, the server answers `409` and the editor shows a conflict banner (*Reload (discard mine)* / *Overwrite anyway*) instead of clobbering the other change.
+
+**Proxy switch:** each machine card footer and the machine page carry a switch reflecting `GET /api/v1/proxy`. Toggling it rewrites the `proxy` key in that manager's config file (format-preserving, via `config-edit.ts`) using the same ETag/If-Match save path, so it is subject to the same conflict rules; the change takes effect immediately (no restart). The switch renders only when the machine supports the endpoint.
 
 ### Layout
 
@@ -512,18 +524,25 @@ webui/
 ├── index.html, vite.config.ts, tsconfig.json, svelte.config.js, package.json
 ├── dist/                      # build output (gitignored)
 └── src/
-    ├── main.ts, App.svelte, app.css
+    ├── main.ts, App.svelte, app.css   # app.css holds the design tokens + component styles
     ├── lib/
     │   ├── api.ts             # typed REST client (api-key header, timeouts)
     │   ├── store.ts           # machine registry + settings (localStorage) + poller
     │   ├── router.ts          # hash router (#/fleet, #/machine/{id}, #/machine/{id}/config)
+    │   ├── Icon.svelte        # small line-icon set (SF-Symbols style)
+    │   ├── highlight.ts       # tiny dependency-free JSON tokenizer for the editor
+    │   ├── config-edit.ts     # format-preserving config edits (proxy key)
+    │   ├── proxy.ts           # toggle the proxy via config edit + ETag
+    │   ├── ProxySwitch.svelte # runtime proxy on/off switch
     │   ├── toast.ts, Toasts.svelte, types.ts
     └── views/
         ├── Fleet.svelte       # per-machine cards; fleet view for coordinators (local + workers, start/stop)
         ├── Machine.svelte     # model list with start/stop (alias shown when set)
-        ├── ConfigEditor.svelte # raw JSON editor with validation, PUT /api/v1/config
+        ├── ConfigEditor.svelte # syntax-highlighted JSON editor; ETag/If-Match conflict handling
         └── SettingsDialog.svelte # manage machines, import/export fleet JSON
 ```
+
+**Design system:** a light/dark Apple-inspired theme defined entirely by CSS custom properties in `app.css` (`--bg`, `--panel`, `--text`, `--accent`, `--ok/--warn/--err`, radii, shadows). Components use the shared classes (`card`, `btn`, `pill`, `dot`, `chip`, `empty`, `modal`, `toast`) and the `Icon` component rather than inline styles. `:root[data-theme="dark"]` overrides the tokens; the theme is toggled from the header and persisted in settings. The two "Open →" style links on a fleet card were replaced by explicit **Manage models** and **Config** actions so the config editor is not confused with the model view.
 
 ### Building and embedding
 
@@ -547,5 +566,5 @@ make build-ui      # make ui + go build -tags embedui
 
 ### Fleet UI tests
 
-- `handlers/handlers_test.go`: config endpoint behaviour (raw GET, validated atomic PUT with reload callback, rejection cases, large bodies); fleet/worker endpoints with fake workers (online/offline/401 pass-through, 502 on transport failures)
+- `handlers/handlers_test.go`: config endpoint behaviour (raw GET, validated atomic PUT with reload callback, rejection cases, large bodies, `ETag`/`If-Match` conditional save with `409` on staleness); fleet/worker endpoints with fake workers (online/offline/401 pass-through, 502 on transport failures)
 - `server/server_test.go`: body-limit exemption for `PUT /api/v1/config` through the full middleware chain; proxy wiring (`/v1` routes with Bearer auth, body-limit exemption, OpenAI-format 404s, disabled-by-default)

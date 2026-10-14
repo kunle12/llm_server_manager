@@ -8,9 +8,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"sync"
+	"syscall"
 	"time"
 
 	"llamamanager/config"
@@ -222,20 +224,36 @@ func (r *Registry) probe(ctx context.Context, w *Worker) (WorkerSnapshot, bool) 
 	return snap, true
 }
 
-// describeWorkerError turns transport/auth failures into short, actionable
-// fleet-view messages.
+// describeWorkerError turns transport/auth failures into short, plain-language
+// fleet-view messages. Raw Go/network error strings ("dial tcp ...: connect:
+// connection refused") are deliberately not surfaced to the UI.
 func describeWorkerError(err error) string {
 	var we *WorkerError
 	if errors.As(err, &we) {
 		if we.StatusCode == http.StatusUnauthorized {
-			return "unauthorized: worker rejected the api-key"
+			return "Unauthorized — check the api-key"
 		}
-		return fmt.Sprintf("HTTP %d: %s", we.StatusCode, we.Message)
+		if we.Message != "" {
+			return we.Message
+		}
+		return fmt.Sprintf("The manager returned an error (HTTP %d)", we.StatusCode)
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return "timed out"
+
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "Timed out"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "Connection refused — the manager isn't running"
+	case errors.Is(err, syscall.EHOSTUNREACH), errors.Is(err, syscall.ENETUNREACH):
+		return "Network unreachable"
 	}
-	return err.Error()
+
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "Host name could not be resolved"
+	}
+
+	return "Unreachable"
 }
 
 // StatusView derives the lean /workers view from a snapshot.

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"llamamanager/config"
@@ -106,6 +107,74 @@ func TestSaveConfigValidatesAndWrites(t *testing.T) {
 	}
 }
 
+func TestConfigConditionalSave(t *testing.T) {
+	initial := `{"models":[{"name":"alpha","launch_cmd":"true","threads":1}]}`
+	h, configPath, reloads := newTestHandler(t, initial)
+
+	// GET exposes an ETag a client can send back as If-Match.
+	rr := httptest.NewRecorder()
+	h.GetConfig(rr, httptest.NewRequest("GET", "/api/v1/config", nil))
+	etag := rr.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("GetConfig must return an ETag")
+	}
+
+	// A conditional GET with the current ETag is a cheap 304 (used for polling).
+	req := httptest.NewRequest("GET", "/api/v1/config", nil)
+	req.Header.Set("If-None-Match", etag)
+	rr = httptest.NewRecorder()
+	h.GetConfig(rr, req)
+	if rr.Code != http.StatusNotModified {
+		t.Fatalf("conditional GET = %d, want 304", rr.Code)
+	}
+
+	// Saving with the matching ETag succeeds and yields a fresh ETag.
+	next := `{"models":[{"name":"beta","launch_cmd":"true","threads":1}]}`
+	req = httptest.NewRequest("PUT", "/api/v1/config", strings.NewReader(next))
+	req.Header.Set("If-Match", etag)
+	rr = httptest.NewRecorder()
+	h.SaveConfig(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("conditional save = %d, body %s", rr.Code, rr.Body.String())
+	}
+	newETag := rr.Header().Get("ETag")
+	if newETag == "" || newETag == etag {
+		t.Fatalf("new ETag = %q, want a fresh value", newETag)
+	}
+
+	// A stale ETag (file changed since load) is rejected and left untouched.
+	stale := `{"models":[{"name":"gamma","launch_cmd":"true","threads":1}]}`
+	req = httptest.NewRequest("PUT", "/api/v1/config", strings.NewReader(stale))
+	req.Header.Set("If-Match", etag)
+	rr = httptest.NewRecorder()
+	h.SaveConfig(rr, req)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("stale save = %d, want 409 (body %s)", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("ETag"); got != newETag {
+		t.Fatalf("409 must report the current ETag %q, got %q", newETag, got)
+	}
+	onDisk, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(onDisk) != next {
+		t.Fatalf("a rejected save must not modify the file, got %q", onDisk)
+	}
+	if *reloads != 1 {
+		t.Fatalf("reload callback ran %d times, want 1 (only on the successful save)", *reloads)
+	}
+
+	// If-Match: * forces an unconditional overwrite (the UI "Overwrite" path).
+	req = httptest.NewRequest("PUT", "/api/v1/config", strings.NewReader(stale))
+	req.Header.Set("If-Match", "*")
+	rr = httptest.NewRecorder()
+	h.SaveConfig(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("force save = %d, want 200 (body %s)", rr.Code, rr.Body.String())
+	}
+}
+
 func TestSaveConfigRejectsInvalidInput(t *testing.T) {
 	initial := `{"models":[{"name":"alpha","launch_cmd":"true","threads":1,"temperature":0.7}]}`
 
@@ -115,7 +184,6 @@ func TestSaveConfigRejectsInvalidInput(t *testing.T) {
 		inBody string // substring expected in the error message
 	}{
 		{"invalid json", `{"models":[`, "invalid JSON"},
-		{"empty models", `{"models":[]}`, "at least one model"},
 		{"missing name", `{"models":[{"model_path":"/m.gguf","threads":1}]}`, "missing a name"},
 		{"duplicate name", `{"models":[{"name":"a","launch_cmd":"x"},{"name":"a","launch_cmd":"y"}]}`, "duplicate"},
 		{"bad temperature", `{"models":[{"name":"a","model_path":"/m.gguf","threads":1,"temperature":3}]}`, "temperature"},
@@ -147,6 +215,33 @@ func TestSaveConfigRejectsInvalidInput(t *testing.T) {
 				t.Fatalf("rejected save must leave the file untouched, got %q", onDisk)
 			}
 		})
+	}
+}
+
+// TestSaveConfigAcceptsEmptyModels verifies that a config with no models can be
+// saved: models may be added later via reload or the UI, so an empty list must
+// not be rejected.
+func TestSaveConfigAcceptsEmptyModels(t *testing.T) {
+	initial := `{"models":[{"name":"alpha","launch_cmd":"true","threads":1}]}`
+	h, configPath, reloads := newTestHandler(t, initial)
+
+	empty := `{"models":[]}`
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("PUT", "/api/v1/config", strings.NewReader(empty))
+	h.SaveConfig(rr, req)
+
+	if rr.Code != 200 {
+		t.Fatalf("SaveConfig status = %d, want 200 (body: %s)", rr.Code, rr.Body.String())
+	}
+	if *reloads != 1 {
+		t.Fatalf("reload callback ran %d times, want 1", *reloads)
+	}
+	onDisk, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(onDisk) != empty {
+		t.Fatalf("config on disk = %q, want %q", onDisk, empty)
 	}
 }
 
@@ -389,6 +484,41 @@ func TestGetFleetLocalFirst(t *testing.T) {
 	}
 }
 
+// TestFleetLocalEmptyModelsIsArray guards against the local machine's models
+// serialising as JSON null when none are configured: the UI iterates the list,
+// and a null there breaks rendering of the whole fleet (workers included).
+func TestFleetLocalEmptyModelsIsArray(t *testing.T) {
+	h, _, _ := newTestHandler(t, `{"workers":["http://w1.local:8080"]}`)
+
+	rr := httptest.NewRecorder()
+	fleetTestRouter(h).ServeHTTP(rr, httptest.NewRequest("GET", "/api/v1/fleet", nil))
+
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"machine":"local"`) {
+		t.Fatalf("fleet view missing the local machine: %s", rr.Body.String())
+	}
+	// The local entry must carry an empty array, never null.
+	if strings.Contains(rr.Body.String(), `"models":null`) {
+		t.Fatalf("local models must serialise as [] not null: %s", rr.Body.String())
+	}
+	var payload struct {
+		Data struct {
+			Machines []fleet.FleetMachine `json:"machines"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(payload.Data.Machines) != 1 {
+		t.Fatalf("machines = %d, want 1 (local only; worker probe is best-effort)", len(payload.Data.Machines))
+	}
+	if payload.Data.Machines[0].Models == nil {
+		t.Fatal("local machine models = nil, want a non-nil empty slice")
+	}
+}
+
 func TestWorkerStartStopPassesThrough(t *testing.T) {
 	// The fake asserts the exact path, method, and api-key the coordinator
 	// must send, then answers per scenario.
@@ -500,3 +630,89 @@ func TestWorkerResolveByHost(t *testing.T) {
 }
 
 func intPtr(i int) *int { return &i }
+
+// TestConfigConcurrentSavesOnlyOneWins checks the If-Match check and the file
+// write are atomic: many callers racing with the same ETag must yield exactly
+// one success, the rest 409. Without serialisation both could pass the check
+// and the last writer would silently win.
+func TestConfigConcurrentSavesOnlyOneWins(t *testing.T) {
+	initial := `{"models":[{"name":"alpha","launch_cmd":"true","threads":1}]}`
+	h, configPath, _ := newTestHandler(t, initial)
+
+	rr := httptest.NewRecorder()
+	h.GetConfig(rr, httptest.NewRequest("GET", "/api/v1/config", nil))
+	etag := rr.Header().Get("ETag")
+
+	const n = 8
+	var wg sync.WaitGroup
+	var ok int32
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			body := fmt.Sprintf(`{"models":[{"name":"m%d","launch_cmd":"true","threads":1}]}`, i)
+			req := httptest.NewRequest("PUT", "/api/v1/config", strings.NewReader(body))
+			req.Header.Set("If-Match", etag)
+			rec := httptest.NewRecorder()
+			h.SaveConfig(rec, req)
+			switch rec.Code {
+			case http.StatusOK:
+				atomic.AddInt32(&ok, 1)
+			case http.StatusConflict:
+				// expected for everybody but the winner
+			default:
+				t.Errorf("unexpected status %d: %s", rec.Code, rec.Body.String())
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	if ok != 1 {
+		t.Fatalf("successful saves = %d, want exactly 1", ok)
+	}
+	onDisk, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(onDisk) {
+		t.Fatalf("file must remain valid JSON after the race, got %s", onDisk)
+	}
+}
+
+// TestListModelsSortedByName checks that model list responses are ordered by
+// name even though the manager stores them in a map (random iteration order).
+// An unstable order makes UI dropdowns jump between polls and can select the
+// wrong model.
+func TestListModelsSortedByName(t *testing.T) {
+	configs := map[string]*models.ModelConfig{
+		"gamma": {Name: "gamma"},
+		"alpha": {Name: "alpha"},
+		"beta":  {Name: "beta"},
+	}
+	h, _, _ := newTestHandlerWith(t, `{"models":[]}`, nil, configs)
+
+	rr := httptest.NewRecorder()
+	h.ListModels(rr, httptest.NewRequest("GET", "/api/v1/models", nil))
+
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
+	}
+	var payload struct {
+		Data struct {
+			Models []models.ModelItem `json:"models"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, m := range payload.Data.Models {
+		names = append(names, m.Name)
+	}
+	if got := strings.Join(names, ","); got != "alpha,beta,gamma" {
+		t.Fatalf("model order = %q, want %q", got, "alpha,beta,gamma")
+	}
+}

@@ -1,5 +1,5 @@
 import { get, writable } from 'svelte/store'
-import { ApiError, getFleet, getRunning } from './api'
+import { ApiError, getFleet, getProxy, getRunning } from './api'
 import type { FleetMachine, Machine, MachineStatus, Settings } from './types'
 
 const MACHINES_KEY = 'llm-fleet.machines.v1'
@@ -41,6 +41,22 @@ export const statuses = writable<Record<string, MachineStatus>>({})
  * those fall back to the single-card view. `undefined` = not probed yet.
  */
 export const fleetViews = writable<Record<string, FleetMachine[] | null>>({})
+
+/**
+ * Runtime proxy state per machine id. `true`/`false` once known; `undefined`
+ * while unknown or unsupported (older manager without GET /api/v1/proxy).
+ */
+export const proxies = writable<Record<string, boolean | undefined>>({})
+
+/** Refresh one machine's proxy state. Never throws. */
+export async function refreshProxy(m: Machine): Promise<void> {
+  try {
+    const enabled = await getProxy(m)
+    proxies.update((s) => ({ ...s, [m.id]: enabled ?? undefined }))
+  } catch {
+    proxies.update((s) => ({ ...s, [m.id]: undefined }))
+  }
+}
 
 /** Refresh one machine's fleet view and running-model status. Never throws. */
 export async function refreshMachine(m: Machine): Promise<void> {
@@ -92,7 +108,45 @@ export async function refreshMachine(m: Machine): Promise<void> {
 
 /** Refresh every machine concurrently. */
 export async function refreshAll(): Promise<void> {
-  await Promise.allSettled(get(machines).map(refreshMachine))
+  await Promise.allSettled(
+    get(machines).flatMap((m) => [refreshMachine(m), refreshProxy(m)]),
+  )
+}
+
+/** Machine id; crypto.randomUUID needs a secure context (localhost/https). */
+function machineId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `m-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+/**
+ * On first load, if no machines are configured, attach the manager that served
+ * this UI as "This machine". It only seeds when the origin actually answers
+ * like an llm_server_manager API, so a static host or the Vite dev server
+ * (which return HTML) stay on manual setup. A key-protected manager still
+ * answers with a JSON envelope (401), so it is seeded too — the user just adds
+ * the key in Settings.
+ */
+export async function bootstrapLocalMachine(): Promise<void> {
+  if (get(machines).length > 0) return
+  const origin = typeof window !== 'undefined' ? window.location.origin : ''
+  if (!origin || origin === 'null') return
+
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 3000)
+  try {
+    const res = await fetch(`${origin}/api/v1/models`, { signal: ctrl.signal })
+    const body: unknown = await res.json().catch(() => null)
+    if (!body || typeof body !== 'object' || !('success' in (body as object))) return
+    if (get(machines).length > 0) return // the user added one meanwhile
+    machines.set([{ id: machineId(), name: 'This machine', url: origin, apiKey: '' }])
+  } catch {
+    // Network error, timeout, or non-JSON body: not a manager, stay manual.
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 let timer: ReturnType<typeof setInterval> | undefined

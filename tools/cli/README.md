@@ -35,7 +35,10 @@ llm-cli [options] <command> [arguments]
 | `start <model>` | - | Start a model server |
 | `stop <model>` | - | Stop a running model server |
 | `status` | `running`, `info` | Show the current running model |
+| `fleet` | - | Show the coordinator's fleet view (local machine + workers) |
 | `version` | - | Show CLI version |
+
+`start` and `stop` accept `--worker <name-or-host>` to act on a coordinator's remote worker instead of locally.
 
 ## Examples
 
@@ -79,6 +82,24 @@ Or check if any model is running:
 ```bash
 $ llm-cli running
 ```
+
+### Fleet view (coordinator)
+
+On an instance configured with `workers`, show every machine and the model each is running:
+
+```bash
+$ llm-cli fleet
+```
+
+### Control a remote worker
+
+When the server is a coordinator, target a specific worker by name or host:
+
+```bash
+$ llm-cli start llama-7b --worker gpu2
+$ llm-cli stop llama-7b --worker gpu2
+```
+
 
 ### Connect to remote server
 

@@ -30,7 +30,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := validateConfigPath(configPath, maxRetries); err != nil {
+	if err := validateConfigPath(configPath); err != nil {
 		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
 		os.Exit(1)
 	}
@@ -111,19 +111,19 @@ func runDaemon(configPath string, enableLogging bool, listenAddr string, maxRetr
 	return nil
 }
 
-func validateConfigPath(configPath string, maxRetries int) error {
+func validateConfigPath(configPath string) error {
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		return fmt.Errorf("configuration file '%s' does not exist", configPath)
 	}
 
-	app, err := server.New(configPath, false, maxRetries)
-	if err != nil {
+	// Validates the config and llama-server availability without constructing
+	// the app (which would log every startup line twice).
+	if err := server.Validate(configPath); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	if app.GetModelCount() == 0 {
-		return fmt.Errorf("configuration file '%s' contains no model definitions", configPath)
-	}
-
+	// A config with no (named) models is valid: the server starts anyway so
+	// models can be added later via a config reload or the web UI. App.Start
+	// logs a warning in this case; no error is returned here.
 	return nil
 }

@@ -2,7 +2,7 @@
 
 **Goal:** one simple, portable app to view and control `llm_server_manager` instances running on multiple machines.
 
-**Status:** awaiting review — not started.
+**Status:** implemented. The UI shipped and was later redesigned (Apple-inspired); it also gained syntax-highlighted config editing with `ETag`/`If-Match` conflict handling and a per-machine proxy switch. See `README.md` (Web UI) and `AGENTS.md` (Web UI section) for the current behaviour; this document describes the original proposal.
 
 ---
 

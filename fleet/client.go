@@ -122,8 +122,9 @@ func (w *Worker) call(ctx context.Context, method, path string, timeout time.Dur
 }
 
 // workerMessage extracts a human-readable message from a worker error reply,
-// which uses the APIResponse envelope when the worker speaks our protocol,
-// falling back to the raw body.
+// which uses the APIResponse envelope when the worker speaks our protocol.
+// Anything else (an HTML error page from a proxy, a truncated body) becomes a
+// generic message rather than leaking the raw payload into the UI.
 func workerMessage(statusCode int, body []byte) string {
 	var envelope struct {
 		Message string `json:"message"`
@@ -131,13 +132,7 @@ func workerMessage(statusCode int, body []byte) string {
 	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Message != "" {
 		return envelope.Message
 	}
-	if snippet := strings.TrimSpace(string(body)); snippet != "" {
-		if len(snippet) > 200 {
-			snippet = snippet[:200] + "..."
-		}
-		return fmt.Sprintf("worker returned HTTP %d: %s", statusCode, snippet)
-	}
-	return fmt.Sprintf("worker returned HTTP %d", statusCode)
+	return fmt.Sprintf("The manager returned an unexpected response (HTTP %d)", statusCode)
 }
 
 // ListModels returns the worker's configured models. This single call is also

@@ -428,6 +428,12 @@ func validateLlamaServerPath(path string) error {
 	return nil
 }
 
+// CheckLlamaServer reports whether the llama-server binary is available, without
+// constructing a manager. Used for early startup validation.
+func CheckLlamaServer() error {
+	return validateLlamaServerPath(getLlamaServerPath())
+}
+
 func validateModelFile(modelPath string) error {
 	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
 		return fmt.Errorf("model file not found: %s", modelPath)

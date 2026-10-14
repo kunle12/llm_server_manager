@@ -1,6 +1,6 @@
 # Coordinator / Worker Architecture + OpenAI Proxy — Design
 
-**Status:** approved — ready for implementation.
+**Status:** implemented. Coordinator/worker mode, the OpenAI-compatible proxy, and model aliases are shipped. One deltas since: the `proxy` setting can now be toggled at runtime (the `/v1` routes are always registered and gated by an in-memory flag), so enabling/disabling no longer needs a restart. See `README.md` and `AGENTS.md` for current behaviour.
 **Scope:** extends the architecture in `AGENTS.md`; the web UI is described in `docs/ui-proposal.md` (shipped).
 
 ---

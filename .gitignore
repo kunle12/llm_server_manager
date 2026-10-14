@@ -1,5 +1,6 @@
 # Binaries
 llm_server_manager
+llama-server
 llm_server_manager-linux-arm64
 llm-cli
 *.exe
@@ -7,6 +8,8 @@ llm-cli
 *.dll
 *.so
 *.dylib
+*.json
+dist/
 
 # Test binary, built with `go test -c`
 *.test

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from '../lib/Icon.svelte'
   import { machines } from '../lib/store'
   import { toast } from '../lib/toast'
   import type { Machine } from '../lib/types'
@@ -59,68 +60,85 @@
 
 <div class="overlay" onclick={onOverlayClick} role="presentation">
   <div class="modal card" role="dialog" aria-modal="true" aria-label="Machines">
-    <h2>Machines</h2>
+    <section>
+      <h2>Machines</h2>
+      <p class="muted hint">Each entry is one llm_server_manager instance the UI can control.</p>
 
-    {#if draft.length === 0}
-      <p class="muted">No machines configured.</p>
-    {/if}
+      {#if draft.length === 0}
+        <p class="muted">No machines configured.</p>
+      {/if}
 
-    {#each draft as m, i (i)}
-      <div class="machine-row">
-        <input bind:value={m.name} placeholder="name" aria-label="Machine name" />
-        <input bind:value={m.url} placeholder="http://host:8080" aria-label="Manager URL" />
-        <input
-          bind:value={m.apiKey}
-          placeholder="api key (optional)"
-          aria-label="API key"
-          type={showKeys ? 'text' : 'password'}
-        />
-        <button class="btn danger" onclick={() => remove(i)} title="Remove">✕</button>
+      {#each draft as m, i (i)}
+        <div class="machine-row">
+          <input bind:value={m.name} placeholder="Name" aria-label="Machine name" />
+          <input bind:value={m.url} placeholder="http://host:8080" aria-label="Manager URL" />
+          <input
+            bind:value={m.apiKey}
+            placeholder="API key (optional)"
+            aria-label="API key"
+            type={showKeys ? 'text' : 'password'}
+          />
+          <button class="icon-btn danger" onclick={() => remove(i)} title="Remove machine" aria-label="Remove machine">
+            <Icon name="trash" size={16} />
+          </button>
+        </div>
+      {/each}
+
+      <div class="row settings-row">
+        <button class="btn subtle" onclick={add}><Icon name="plus" size={15} /> Add machine</button>
+        <label class="check muted">
+          <input type="checkbox" bind:checked={showKeys} /> Show keys
+        </label>
       </div>
-    {/each}
+    </section>
 
-    <div class="row">
-      <button class="btn" onclick={add}>+ Add machine</button>
-      <label class="muted">
-        <input type="checkbox" bind:checked={showKeys} /> show keys
-      </label>
-    </div>
+    <section>
+      <h2>Import / export</h2>
+      <textarea
+        bind:value={importText}
+        rows="6"
+        class="code"
+        spellcheck="false"
+        placeholder="Paste fleet JSON here, or press Export and copy"
+      ></textarea>
+      <div class="row settings-row">
+        <button class="btn subtle" onclick={doExport}><Icon name="external" size={15} /> Export</button>
+        <button class="btn subtle" onclick={doImport}><Icon name="box" size={15} /> Import</button>
+      </div>
+    </section>
 
-    <h2>Import / export</h2>
-    <textarea
-      bind:value={importText}
-      rows="6"
-      class="code"
-      placeholder="Paste fleet JSON here, or press Export and copy"
-    ></textarea>
-    <div class="row" style="margin-top: 0.5rem">
-      <button class="btn" onclick={doExport}>Export</button>
-      <button class="btn" onclick={doImport}>Import</button>
-    </div>
-
-    <div class="row end">
-      <button class="btn" onclick={onclose}>Cancel</button>
+    <div class="modal-foot">
+      <button class="btn subtle" onclick={onclose}>Cancel</button>
       <button class="btn primary" onclick={save}>Save</button>
     </div>
   </div>
 </div>
 
 <style>
-  h2 {
-    margin-top: 0.4rem;
+  .hint {
+    margin: 0 0 0.9rem;
+    font-size: 0.88rem;
   }
 
-  .machine-row {
-    display: grid;
-    grid-template-columns: 1fr 2fr 1.2fr auto;
-    gap: 0.5rem;
-    margin-bottom: 0.5rem;
+  .settings-row {
+    margin-top: 0.7rem;
   }
 
-  .code {
-    width: 100%;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.8rem;
-    white-space: pre;
+  .check {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+    margin-left: 0.4rem;
+  }
+
+  .check input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
+  }
+
+  textarea.code {
+    min-height: 8rem;
   }
 </style>

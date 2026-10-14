@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
+  import Icon from './lib/Icon.svelte'
   import { hash } from './lib/router'
-  import { refreshAll, settings } from './lib/store'
+  import { bootstrapLocalMachine, refreshAll, settings } from './lib/store'
   import Toasts from './lib/Toasts.svelte'
   import ConfigEditor from './views/ConfigEditor.svelte'
   import Fleet from './views/Fleet.svelte'
@@ -30,31 +32,58 @@
   $effect(() => {
     document.documentElement.dataset.theme = $settings.theme
   })
+
+  // Attach the manager that served this UI on first run, then load its fleet.
+  onMount(async () => {
+    await bootstrapLocalMachine()
+    await refreshAll()
+  })
 </script>
 
 <header>
-  <a class="brand" href="#/fleet">⚡ LLM Fleet</a>
+  <a class="brand" href="#/fleet">
+    <span class="brand-mark"><Icon name="bolt" size={15} /></span>
+    <span>LLM Fleet Manager</span>
+  </a>
   <div class="spacer"></div>
+
   {#if view === 'fleet'}
-    <select value={$settings.pollMs} onchange={setPollMs} title="Poll interval">
-      {#each pollOptions as ms (ms)}
-        <option value={ms}>{ms / 1000}s</option>
-      {/each}
-    </select>
+    <label class="poll-label">
+      <span>Auto-refresh</span>
+      <select value={$settings.pollMs} onchange={setPollMs} title="Poll interval">
+        {#each pollOptions as ms (ms)}
+          <option value={ms}>{ms / 1000}s</option>
+        {/each}
+      </select>
+    </label>
     <button
-      class="btn icon"
+      class="icon-btn"
       onclick={togglePause}
-      title={$settings.paused ? 'Resume polling' : 'Pause polling'}
+      title={$settings.paused ? 'Resume auto-refresh' : 'Pause auto-refresh'}
+      aria-label={$settings.paused ? 'Resume auto-refresh' : 'Pause auto-refresh'}
     >
-      {$settings.paused ? '▶' : '⏸'}
+      <Icon name={$settings.paused ? 'play' : 'pause'} />
     </button>
-    <button class="btn icon" onclick={() => refreshAll()} title="Refresh now">⟳</button>
+    <button class="icon-btn" onclick={() => refreshAll()} title="Refresh now" aria-label="Refresh now">
+      <Icon name="refresh" />
+    </button>
   {/if}
-  <button class="btn icon" onclick={toggleTheme} title="Toggle theme">
-    {$settings.theme === 'dark' ? '☀' : '🌙'}
+
+  <button
+    class="icon-btn"
+    onclick={toggleTheme}
+    title="Toggle light/dark"
+    aria-label="Toggle light/dark"
+  >
+    <Icon name={$settings.theme === 'dark' ? 'sun' : 'moon'} />
   </button>
-  <button class="btn icon" onclick={() => (showSettings = true)} title="Machines & settings">
-    ⚙
+  <button
+    class="icon-btn"
+    onclick={() => (showSettings = true)}
+    title="Machines & settings"
+    aria-label="Machines and settings"
+  >
+    <Icon name="gear" />
   </button>
 </header>
 

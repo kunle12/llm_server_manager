@@ -452,3 +452,113 @@ func TestEmptyNamedModelsAreSkipped(t *testing.T) {
 	}
 	check("beta")
 }
+
+// TestCORSPreflight checks that an OPTIONS preflight for an API route is
+// answered with the CORS allow headers rather than mux's 405. Cross-origin
+// clients (a UI served from another origin, e.g. localhost vs 127.0.0.1, or a
+// separate dev server) depend on this to reach the API at all.
+func TestCORSPreflight(t *testing.T) {
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "llama-server")
+	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LLAMA_SERVER_PATH", fakeBin)
+
+	configPath := filepath.Join(dir, "llm_config.json")
+	if err := os.WriteFile(configPath, []byte(`{"models":[{"name":"alpha","launch_cmd":"true","threads":1}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app, err := New(configPath, false, 6)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	const origin = "http://other.local:5173"
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/fleet", nil)
+	req.Header.Set("Origin", origin)
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	req.Header.Set("Access-Control-Request-Headers", "api-key")
+	rr := httptest.NewRecorder()
+	app.handler.CORS(app.router).ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("preflight status = %d, want 200 (body %s)", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != origin {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, origin)
+	}
+	if !strings.Contains(rr.Header().Get("Access-Control-Allow-Headers"), "api-key") {
+		t.Fatalf("Access-Control-Allow-Headers = %q, want api-key allowed", rr.Header().Get("Access-Control-Allow-Headers"))
+	}
+}
+
+// TestProxyTogglesLiveWithoutRestart checks that flipping "proxy" in the config
+// takes effect on reload (the /v1 routes are gated at request time) and that
+// GET /api/v1/proxy reports the runtime state the UI shows.
+func TestProxyTogglesLiveWithoutRestart(t *testing.T) {
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "llama-server")
+	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LLAMA_SERVER_PATH", fakeBin)
+
+	configPath := filepath.Join(dir, "llm_config.json")
+	write := func(proxy bool) {
+		body := fmt.Sprintf(`{"models":[{"name":"alpha","launch_cmd":"true","threads":1}],"proxy":%t}`, proxy)
+		if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(false)
+
+	app, err := New(configPath, false, 6)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	status := func(path string) int {
+		rr := httptest.NewRecorder()
+		app.router.ServeHTTP(rr, httptest.NewRequest("GET", path, nil))
+		return rr.Code
+	}
+	proxyEnabled := func() bool {
+		rr := httptest.NewRecorder()
+		app.router.ServeHTTP(rr, httptest.NewRequest("GET", "/api/v1/proxy", nil))
+		if rr.Code != 200 {
+			t.Fatalf("GET /api/v1/proxy = %d, body %s", rr.Code, rr.Body.String())
+		}
+		return strings.Contains(rr.Body.String(), `"enabled":true`)
+	}
+
+	if got := status("/v1/models"); got != 404 {
+		t.Fatalf("proxy off: /v1/models = %d, want 404", got)
+	}
+	if proxyEnabled() {
+		t.Fatal("proxy status should be false when config proxy is off")
+	}
+
+	// Enable via config reload — no restart.
+	write(true)
+	if err := app.reloadConfig(); err != nil {
+		t.Fatalf("reloadConfig: %v", err)
+	}
+	if got := status("/v1/models"); got != 200 {
+		t.Fatalf("proxy on: /v1/models = %d, want 200", got)
+	}
+	if !proxyEnabled() {
+		t.Fatal("proxy status should be true after enabling via reload")
+	}
+
+	// Disable again.
+	write(false)
+	if err := app.reloadConfig(); err != nil {
+		t.Fatalf("reloadConfig: %v", err)
+	}
+	if got := status("/v1/models"); got != 404 {
+		t.Fatalf("proxy off again: /v1/models = %d, want 404", got)
+	}
+	if proxyEnabled() {
+		t.Fatal("proxy status should be false after disabling via reload")
+	}
+}

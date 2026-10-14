@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -26,17 +27,23 @@ import (
 )
 
 type App struct {
-	mgr           *manager.ServerManager
-	handler       *handlers.Handler
-	fleet         *fleet.Registry
-	proxy         *proxy.Router
-	proxyEnabled  bool
+	mgr     *manager.ServerManager
+	handler *handlers.Handler
+	fleet   *fleet.Registry
+	proxy   *proxy.Router
+	// proxyEnabled gates the /v1 routes at request time so toggling the
+	// "proxy" config key takes effect on reload without a restart.
+	proxyEnabled  atomic.Bool
 	logger        func(format string, args ...interface{})
 	router        *mux.Router
 	httpSrv       *http.Server
 	enableLogging bool
 	configPath    string
 	watcherWg     sync.WaitGroup
+	// reloadMu serialises reloads: the PUT callback and the file watcher can
+	// both call reloadConfig, and config.Reload drives the global viper
+	// singleton, which is not safe for concurrent use.
+	reloadMu sync.Mutex
 
 	// ServeUI controls serving the embedded web UI at /ui/ (see registerUIRoutes).
 	ServeUI bool
@@ -173,25 +180,29 @@ func New(configPath string, enableLogging bool, maxRetries int) (*App, error) {
 
 	h := handlers.New(mgr, fleetReg, logger, configPath)
 
-	// The /v1 proxy exists only when enabled: with proxy off, /v1 paths 404
-	// exactly as before. Toggling it via config reload requires a restart
-	// (route registration happens once, below).
-	var v1proxy *proxy.Router
-	if bool(cfg.Proxy) {
-		v1proxy = proxy.New(mgr, fleetReg, h.APIKey(), h.AuthEnabled(), logger)
-		logger("Proxy enabled: /v1 routes active")
-	}
+	// The /v1 proxy routes are always registered but gated by a runtime flag,
+	// so toggling "proxy" in the config applies on reload without a restart.
+	// When off, /v1 answers 404 exactly as it did when the routes were absent.
+	v1proxy := proxy.New(mgr, fleetReg, h.APIKey(), h.AuthEnabled(), logger)
 
 	app := &App{
 		mgr:           mgr,
 		handler:       h,
 		fleet:         fleetReg,
 		proxy:         v1proxy,
-		proxyEnabled:  bool(cfg.Proxy),
 		logger:        logger,
 		enableLogging: enableLogging,
 		configPath:    configPath,
 	}
+	app.proxyEnabled.Store(bool(cfg.Proxy))
+	if bool(cfg.Proxy) {
+		logger("Proxy enabled: /v1 routes active")
+	} else {
+		logger("Proxy disabled: /v1 routes return 404")
+	}
+
+	// The control API reports the runtime proxy state to the UI.
+	h.SetProxyStatus(app.ProxyEnabled)
 
 	// After an API config save, reload immediately so the response reflects
 	// the new state. The file watcher reloads anyway if this fails.
@@ -206,6 +217,26 @@ func New(configPath string, enableLogging bool, maxRetries int) (*App, error) {
 // manager so it stays consistent with concurrent config reloads.
 func (a *App) GetModelCount() int {
 	return a.mgr.ModelCount()
+}
+
+// Validate loads the configuration and checks that llama-server is available,
+// without constructing the application or logging. Used at startup to fail fast
+// (and, in daemon mode, before forking) without building the runtime twice and
+// duplicating the startup log lines.
+func Validate(configPath string) error {
+	if _, err := config.Load(configPath); err != nil {
+		return err
+	}
+	return manager.CheckLlamaServer()
+}
+
+// warnIfNoModels logs a warning when no models are configured. An empty model
+// set is not fatal: the server stays up so models can be added later through a
+// config reload or the web UI.
+func (a *App) warnIfNoModels() {
+	if a.GetModelCount() == 0 {
+		a.logger("Warning: no models are configured; the server will run but cannot serve any model until the configuration is updated")
+	}
 }
 
 // configReloadDebounce is how long to wait after the last config file event
@@ -305,6 +336,9 @@ func (a *App) WatchConfig() {
 // and the worker registry. Only configuration changes: a running llama.cpp
 // process is never restarted or stopped by a reload.
 func (a *App) reloadConfig() error {
+	a.reloadMu.Lock()
+	defer a.reloadMu.Unlock()
+
 	cfg, err := config.Reload(a.configPath)
 	if err != nil {
 		return err
@@ -312,17 +346,26 @@ func (a *App) reloadConfig() error {
 
 	a.mgr.ReloadConfigs(indexModels(cfg.Models, a.logger))
 	a.fleet.Reload(cfg.Workers)
+	a.warnIfNoModels()
 
-	if bool(cfg.Proxy) != a.proxyEnabled {
-		a.logger("Warning: the 'proxy' setting changed via config reload; restart the process to apply")
+	// Apply the proxy setting live (the /v1 routes are gated at request time).
+	if enabled := bool(cfg.Proxy); a.proxyEnabled.Swap(enabled) != enabled {
+		if enabled {
+			a.logger("Proxy enabled via config reload: /v1 routes active")
+		} else {
+			a.logger("Proxy disabled via config reload: /v1 routes return 404")
+		}
 	}
 	return nil
 }
 
+// ProxyEnabled reports whether the OpenAI-compatible /v1 proxy is active.
+func (a *App) ProxyEnabled() bool {
+	return a.proxyEnabled.Load()
+}
+
 func (a *App) setupRouter() {
 	r := mux.NewRouter()
-
-	r.Use(a.handler.CORS)
 
 	// Rate limiting: 10 requests per second, burst of 20
 	rl := newRateLimiter(rate.Limit(10), 20)
@@ -360,25 +403,40 @@ func (a *App) setupRouter() {
 	api.HandleFunc("/workers/{worker}/models/{model}/start", a.handler.WorkerStartModel).Methods("POST")
 	api.HandleFunc("/workers/{worker}/models/{model}/stop", a.handler.WorkerStopModel).Methods("DELETE")
 	api.HandleFunc("/fleet", a.handler.GetFleet).Methods("GET")
+	api.HandleFunc("/proxy", a.handler.GetProxyStatus).Methods("GET")
 
-	// OpenAI-compatible proxy (coordinator config, "proxy": true).
-	if a.proxy != nil {
-		v1 := r.PathPrefix("/v1").Subrouter()
-		v1.Use(a.proxy.RequireAuth)
-		v1.HandleFunc("/models", a.proxy.ListModels).Methods("GET")
-		v1.HandleFunc("/chat/completions", a.proxy.HandleGeneration).Methods("POST")
-		v1.HandleFunc("/completions", a.proxy.HandleGeneration).Methods("POST")
-		v1.HandleFunc("/embeddings", a.proxy.HandleGeneration).Methods("POST")
-		v1.NotFoundHandler = http.HandlerFunc(a.proxy.NotFound)
-	}
+	// OpenAI-compatible proxy (/v1). Routes are always registered and gated by
+	// the runtime flag so toggling "proxy" in the config is live; when off they
+	// answer the proxy's OpenAI-format 404.
+	v1 := r.PathPrefix("/v1").Subrouter()
+	v1.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !a.proxyEnabled.Load() {
+				a.proxy.Disabled(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	v1.Use(a.proxy.RequireAuth)
+	v1.HandleFunc("/models", a.proxy.ListModels).Methods("GET")
+	v1.HandleFunc("/chat/completions", a.proxy.HandleGeneration).Methods("POST")
+	v1.HandleFunc("/completions", a.proxy.HandleGeneration).Methods("POST")
+	v1.HandleFunc("/embeddings", a.proxy.HandleGeneration).Methods("POST")
+	v1.NotFoundHandler = http.HandlerFunc(a.proxy.NotFound)
 
 	a.router = r
 }
 
 func (a *App) Start(listenAddr string) error {
 	a.httpSrv = &http.Server{
-		Addr:    listenAddr,
-		Handler: a.router,
+		Addr: listenAddr,
+		// CORS is applied as the outermost wrapper (not only on matched
+		// routes) so that preflight OPTIONS requests — which mux would answer
+		// with 405 before any route-level middleware runs — are handled. A UI
+		// served from a different origin (another host/port, or localhost vs
+		// 127.0.0.1) otherwise cannot reach the API at all.
+		Handler: a.handler.CORS(a.router),
 		// ReadHeaderTimeout keeps slowloris protection on headers. Read and
 		// write timeouts are disabled: LLM generations stream for minutes and
 		// the old 15s WriteTimeout truncated every long response. Control
@@ -390,6 +448,7 @@ func (a *App) Start(listenAddr string) error {
 	}
 
 	a.registerUIRoutes()
+	a.warnIfNoModels()
 
 	// Start config file watcher
 	a.WatchConfig()

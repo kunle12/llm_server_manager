@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Icon from '../lib/Icon.svelte'
+  import ProxySwitch from '../lib/ProxySwitch.svelte'
   import { machines, fleetViews, refreshMachine, statuses } from '../lib/store'
   import { startModel, stopModel, workerStartModel, workerStopModel } from '../lib/api'
   import { toast } from '../lib/toast'
@@ -16,6 +18,27 @@
 
   function displayName(item: ModelItem): string {
     return item.alias || item.name
+  }
+
+  /**
+   * Models that can be started, sorted by display name. The server may return
+   * them in any order (its model map iterates randomly), so sorting here keeps
+   * the dropdown stable between polls and across a worker on an older binary.
+   */
+  function selectable(entry: FleetMachine): ModelItem[] {
+    return (entry.models ?? [])
+      .filter((x) => !x.active)
+      .sort((a, b) => displayName(a).localeCompare(displayName(b)))
+  }
+
+  /** Map raw browser fetch failures to plain language (single-machine view). */
+  function friendlyError(message?: string): string {
+    if (!message) return 'Unreachable'
+    if (/failed to fetch|load failed|network ?error/i.test(message)) {
+      return "Can't reach the machine — check it's running and the URL is correct"
+    }
+    if (/timeout/i.test(message)) return 'Timed out'
+    return message
   }
 
   function isLocal(entry: FleetMachine): boolean {
@@ -68,183 +91,208 @@
   }
 </script>
 
+<div class="page-head">
+  <div>
+    <h1>Fleet</h1>
+    <p class="sub">Monitor and control every model across your machines.</p>
+  </div>
+</div>
+
 {#if $machines.length === 0}
   <div class="card empty">
+    <div class="empty-icon"><Icon name="server" size={26} /></div>
     <h2>No machines yet</h2>
-    <p class="muted">Add an llm_server_manager instance to see and control its models.</p>
-    <button class="btn primary" onclick={onopenSettings}>Add a machine</button>
+    <p class="muted">
+      Add an llm_server_manager instance to see and control its models. The manager serving this
+      page is added automatically.
+    </p>
+    <button class="btn primary" onclick={onopenSettings}>
+      <Icon name="plus" size={16} /> Add a machine
+    </button>
   </div>
 {:else}
   <div class="grid">
     {#each $machines as m (m.id)}
       {@const fv = $fleetViews[m.id]}
       {#if fv === undefined}
-        <div class="card machine">
-          <div class="row">
-            <span class="dot checking"></span>
-            <a class="name" href={`#/machine/${m.id}`}>{m.name}</a>
-            <span class="badge checking">checking</span>
+        <article class="card machine">
+          <div class="machine-head">
+            <div class="machine-title">
+              <span class="dot checking"></span>
+              <a class="machine-name" href={`#/machine/${m.id}`}>{m.name}</a>
+            </div>
+            <span class="spacer"></span>
+            <span class="pill checking">Checking</span>
           </div>
-          <div class="muted">checking…</div>
-        </div>
+          <div class="entry"><p class="muted">Contacting {m.name}…</p></div>
+        </article>
       {:else if fv !== null}
-        {@const st = $statuses[m.id] ?? { state: 'checking' }}
-        <div class="card machine coordinator">
-          <div class="row">
-            <a class="name" href={`#/machine/${m.id}`}>{m.name}</a>
-            <span class="badge fleet">fleet</span>
+        <article class="card machine">
+          <div class="machine-head">
+            <div class="machine-title">
+              <a class="machine-name" href={`#/machine/${m.id}`}>{m.name}</a>
+            </div>
+            <span class="spacer"></span>
+            <span class="pill fleet"><Icon name="bolt" size={12} /> Coordinator</span>
           </div>
-          {#each fv as entry (entry.machine)}
-            {@const k = key(m.id, entry.machine)}
-            <div class="entry">
-              <div class="row">
-                <span class="dot {entry.status}"></span>
-                <span class="entry-name">{entry.machine}</span>
-                {#if isLocal(entry)}<span class="muted small">(this machine)</span>{/if}
-              </div>
 
-              {#if entry.status === 'online'}
-                {#if entry.running}
-                  <div class="model">{entry.running.alias || entry.running.name}</div>
-                  <div class="muted">
-                    running{entry.running.port ? ` on port ${entry.running.port}` : ''}
-                  </div>
-                  {#if confirmStop === k}
-                    <div class="confirm">
-                      <span>Stop {entry.running.alias || entry.running.name}?</span>
-                      <button class="btn danger" disabled={busy === k} onclick={() => doStop(m.id, entry, entry.running!.name)}>
-                        Yes, stop
+          <ul class="entries">
+            {#each fv as entry (entry.machine)}
+              {@const k = key(m.id, entry.machine)}
+              <li class="entry">
+                <div class="entry-head">
+                  <span class="dot {entry.status}"></span>
+                  <span class="entry-name">{entry.machine}</span>
+                  {#if isLocal(entry)}<span class="tag">this machine</span>{/if}
+                </div>
+
+                {#if entry.status === 'online'}
+                  {#if entry.running}
+                    <div class="entry-body">
+                      <span class="entry-model">{entry.running.alias || entry.running.name}</span>
+                      {#if entry.running.port}
+                        <span class="muted">running on port {entry.running.port}</span>
+                      {:else}
+                        <span class="muted">running</span>
+                      {/if}
+                    </div>
+                    {#if confirmStop === k}
+                      <div class="confirm">
+                        <span>Stop {entry.running.alias || entry.running.name}?</span>
+                        <button
+                          class="btn danger"
+                          disabled={busy === k}
+                          onclick={() => doStop(m.id, entry, entry.running!.name)}
+                        >
+                          Stop
+                        </button>
+                        <button class="btn subtle" onclick={() => (confirmStop = null)}>Cancel</button>
+                      </div>
+                    {:else}
+                      <div class="row end">
+                        <button
+                          class="btn danger"
+                          disabled={busy === k}
+                          onclick={() => (confirmStop = k)}
+                        >
+                          <Icon name="stop" size={16} /> Stop
+                        </button>
+                      </div>
+                    {/if}
+                  {:else if selectable(entry).length > 0}
+                    <div class="row startrow">
+                      <select
+                        class="select"
+                        value={pickedModel[k] ?? ''}
+                        onchange={(e) =>
+                          (pickedModel = {
+                            ...pickedModel,
+                            [k]: (e.currentTarget as HTMLSelectElement).value,
+                          })}
+                      >
+                        <option value="">Start a model…</option>
+                        {#each selectable(entry) as item (item.name)}
+                          <option value={item.name}>{displayName(item)}</option>
+                        {/each}
+                      </select>
+                      <button
+                        class="btn primary"
+                        disabled={busy === k || !pickedModel[k]}
+                        onclick={() => doStart(m.id, entry)}
+                      >
+                        <Icon name="play" size={13} /> Start
                       </button>
-                      <button class="btn" onclick={() => (confirmStop = null)}>Cancel</button>
                     </div>
                   {:else}
-                    <div class="row end">
-                      <button class="btn danger" disabled={busy === k} onclick={() => (confirmStop = k)}>
-                        ■ Stop
-                      </button>
-                    </div>
+                    <p class="muted entry-note">No models configured</p>
                   {/if}
-                {:else if entry.models.length > 0}
-                  <div class="muted">no model running</div>
-                  <div class="row startrow">
-                    <select
-                      class="select"
-                      onchange={(e) => (pickedModel = { ...pickedModel, [k]: (e.currentTarget as HTMLSelectElement).value })}
-                    >
-                      <option value="">start a model…</option>
-                      {#each entry.models.filter((x) => !x.active) as item (item.name)}
-                        <option value={item.name}>{displayName(item)}</option>
-                      {/each}
-                    </select>
-                    <button
-                      class="btn primary"
-                      disabled={busy === k || !pickedModel[k]}
-                      onclick={() => doStart(m.id, entry)}
-                    >
-                      ▶ Start
-                    </button>
-                  </div>
                 {:else}
-                  <div class="muted">no models configured</div>
+                  <p class="entry-error">{friendlyError(entry.error)}</p>
                 {/if}
-              {:else}
-                <div class="error">{entry.error || 'unreachable'}</div>
-              {/if}
-            </div>
-          {/each}
-          <div class="row end">
-            <a class="open" href={`#/machine/${m.id}`}>Open →</a>
+              </li>
+            {/each}
+          </ul>
+
+          <div class="machine-foot">
+            <a class="link-btn" href={`#/machine/${m.id}`}>
+              Manage models <Icon name="chevronRight" size={14} />
+            </a>
+            <span class="spacer"></span>
+            <ProxySwitch machine={m} compact />
+            <a class="link-btn subtle" href={`#/machine/${m.id}/config`}>
+              <Icon name="sliders" size={14} /> Config
+            </a>
           </div>
-        </div>
+        </article>
       {:else}
         {@const st = $statuses[m.id] ?? { state: 'checking' }}
-        <div class="card machine">
-          <div class="row">
-            <span class="dot {st.state}"></span>
-            <a class="name" href={`#/machine/${m.id}`}>{m.name}</a>
-            <span class="badge {st.state}">{st.state}</span>
+        <article class="card machine">
+          <div class="machine-head">
+            <div class="machine-title">
+              <span class="dot {st.state}"></span>
+              <a class="machine-name" href={`#/machine/${m.id}`}>{m.name}</a>
+            </div>
+            <span class="spacer"></span>
+            <span class="pill {st.state}">{st.state}</span>
           </div>
 
-          {#if st.state === 'running'}
-            <div class="model">{st.model}</div>
-            <div class="muted">running</div>
-            {#if confirmStop === m.id}
-              <div class="confirm">
-                <span>Stop {st.model}?</span>
-                <button class="btn danger" disabled={busy === m.id} onclick={() => doStopLocal(m.id, st.model!)}>
-                  Yes, stop
-                </button>
-                <button class="btn" onclick={() => (confirmStop = null)}>Cancel</button>
+          <div class="entry">
+            {#if st.state === 'running'}
+              <div class="entry-body">
+                <span class="entry-model">{st.model}</span>
+                <span class="muted">running</span>
               </div>
+              {#if confirmStop === m.id}
+                <div class="confirm">
+                  <span>Stop {st.model}?</span>
+                  <button
+                    class="btn danger"
+                    disabled={busy === m.id}
+                    onclick={() => doStopLocal(m.id, st.model!)}
+                  >
+                    Stop
+                  </button>
+                  <button class="btn subtle" onclick={() => (confirmStop = null)}>Cancel</button>
+                </div>
+              {:else}
+                <div class="row end">
+                  <button
+                    class="btn danger"
+                    disabled={busy === m.id}
+                    onclick={() => (confirmStop = m.id)}
+                  >
+                    <Icon name="stop" size={16} /> Stop
+                  </button>
+                </div>
+              {/if}
+            {:else if st.state === 'idle'}
+              <p class="muted entry-note">No model running</p>
+            {:else if st.state === 'offline'}
+              <p class="entry-error">{friendlyError(st.error)}</p>
             {:else}
-              <div class="row end">
-                <button class="btn danger" disabled={busy === m.id} onclick={() => (confirmStop = m.id)}>
-                  ■ Stop
-                </button>
-              </div>
+              <p class="muted entry-note">Checking…</p>
             {/if}
-          {:else if st.state === 'idle'}
-            <div class="muted">no model running</div>
-          {:else if st.state === 'offline'}
-            <div class="error">{st.error || 'unreachable'}</div>
-          {:else}
-            <div class="muted">checking…</div>
-          {/if}
-
-          <div class="row end">
-            <a class="open" href={`#/machine/${m.id}`}>Open →</a>
           </div>
-        </div>
+
+          <div class="machine-foot">
+            <a class="link-btn" href={`#/machine/${m.id}`}>
+              Manage models <Icon name="chevronRight" size={14} />
+            </a>
+            <span class="spacer"></span>
+            <ProxySwitch machine={m} compact />
+            <a class="link-btn subtle" href={`#/machine/${m.id}/config`}>
+              <Icon name="sliders" size={14} /> Config
+            </a>
+          </div>
+        </article>
       {/if}
     {/each}
   </div>
 {/if}
 
 <style>
-  .machine .name {
-    font-weight: 600;
-    color: var(--text);
-  }
-
-  .machine .model {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.95rem;
-    margin: 0.45rem 0 0.1rem;
-  }
-
-  .coordinator {
-    border-left: 3px solid var(--accent, #4a7dff);
-  }
-
-  .badge.fleet {
-    margin-left: auto;
-  }
-
-  .entry {
-    border-top: 1px solid var(--border, #e5e5e5);
-    margin-top: 0.5rem;
-    padding-top: 0.5rem;
-  }
-
-  .entry-name {
-    font-weight: 600;
-  }
-
-  .small {
-    font-size: 0.8rem;
-  }
-
-  .startrow {
-    gap: 0.5rem;
-    margin-top: 0.4rem;
-  }
-
-  .select {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .open {
-    font-size: 0.85rem;
+  .entry-note {
+    margin: 0.45rem 0 0;
+    font-size: 0.88rem;
   }
 </style>

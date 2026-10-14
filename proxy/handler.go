@@ -83,6 +83,13 @@ func (p *Router) NotFound(w http.ResponseWriter, r *http.Request) {
 		"unknown endpoint: "+r.Method+" "+r.URL.Path)
 }
 
+// Disabled answers /v1 requests when the proxy is turned off. The status is
+// 404 (as when the routes did not exist) with a clear message in the body.
+func (p *Router) Disabled(w http.ResponseWriter, r *http.Request) {
+	writeError(w, http.StatusNotFound, "invalid_request_error", "proxy_disabled",
+		"the OpenAI-compatible proxy is disabled on this manager")
+}
+
 // ListModels serves GET /v1/models: only models currently alive on some
 // machine, named by alias when set, else by real name.
 func (p *Router) ListModels(w http.ResponseWriter, r *http.Request) {
