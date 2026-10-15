@@ -2,7 +2,9 @@ package proxy
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -110,11 +112,54 @@ func (p *Router) ListModels(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(data, func(i, j int) bool { return data[i].ID < data[j].ID })
 
+	// Strong ETag over the published list lets clients poll cheaply with
+	// If-None-Match and get a 304 when nothing changed (mirrors the config
+	// endpoint). no-store keeps the browser from answering from its own cache.
+	etag := modelsETag(data)
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "no-store")
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		Object string        `json:"object"`
 		Data   []openAIModel `json:"data"`
 	}{Object: "list", Data: data})
+}
+
+// modelsETag is a strong validator derived from the published model IDs and
+// their start times, so any change to the running set (start, stop or restart)
+// alters it.
+func modelsETag(data []openAIModel) string {
+	sum := sha256.New()
+	for _, m := range data {
+		sum.Write([]byte(m.ID))
+		sum.Write([]byte{0})
+		fmt.Fprintf(sum, "%d", m.Created)
+		sum.Write([]byte{0})
+	}
+	return `"` + hex.EncodeToString(sum.Sum(nil)[:16]) + `"`
+}
+
+// etagMatches implements the If-None-Match comparison, tolerating the "*"
+// wildcard, weak prefixes, and comma-separated lists (mirrors handlers.etagMatches).
+func etagMatches(header, etag string) bool {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return false
+	}
+	if header == "*" {
+		return true
+	}
+	for _, part := range strings.Split(header, ",") {
+		if strings.TrimPrefix(strings.TrimSpace(part), "W/") == etag {
+			return true
+		}
+	}
+	return false
 }
 
 // HandleGeneration serves POST /v1/chat/completions, /v1/completions and

@@ -160,6 +160,61 @@ func TestV1ModelsAliveOnly(t *testing.T) {
 	}
 }
 
+func TestV1ModelsConditionalGET(t *testing.T) {
+	local := &stubLocal{
+		currents: []*models.RunningServer{runningServer("m1", 9001)},
+	}
+	router, _ := newTestProxy(t, local, nil, testKey, true)
+
+	// First GET: returns a strong ETag and the body.
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer "+testKey)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("initial GET = %d, body %s", rr.Code, rr.Body.String())
+	}
+	etag := rr.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("GET /v1/models must return an ETag")
+	}
+
+	// Conditional GET with the current ETag is a cheap 304 (used for polling).
+	req = httptest.NewRequest("GET", "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer "+testKey)
+	req.Header.Set("If-None-Match", etag)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != 304 {
+		t.Fatalf("conditional GET = %d, body %s, want 304", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("ETag") != etag {
+		t.Fatalf("304 must carry the same ETag %q, got %q", etag, rr.Header().Get("ETag"))
+	}
+
+	// A stale ETag still returns the full body.
+	req = httptest.NewRequest("GET", "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer "+testKey)
+	req.Header.Set("If-None-Match", `"stale"`)
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("stale conditional GET = %d, want 200", rr.Code)
+	}
+}
+
+func TestModelsETagTracksRestart(t *testing.T) {
+	a := modelsETag([]openAIModel{{ID: "m1", Created: 100}})
+	b := modelsETag([]openAIModel{{ID: "m1", Created: 200}})
+	c := modelsETag([]openAIModel{{ID: "m1", Created: 100}})
+	if a != c {
+		t.Fatalf("ETag must be deterministic, got %q and %q", a, c)
+	}
+	if a == b {
+		t.Fatal("ETag must change when a model restarts (Created changes)")
+	}
+}
+
 func TestChatRoutesToLocalAndStripsAuth(t *testing.T) {
 	var gotAuth string
 	var gotPath string
