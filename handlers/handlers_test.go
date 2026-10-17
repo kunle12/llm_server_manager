@@ -15,6 +15,7 @@ import (
 	"llamamanager/config"
 	"llamamanager/fleet"
 	"llamamanager/manager"
+	"llamamanager/metrics"
 	"llamamanager/models"
 
 	"github.com/gorilla/mux"
@@ -313,6 +314,7 @@ func fleetTestRouter(h *Handler) http.Handler {
 	router := mux.NewRouter()
 	router.HandleFunc("/api/v1/workers", h.ListWorkers).Methods("GET")
 	router.HandleFunc("/api/v1/workers/{worker}/models", h.WorkerListModels).Methods("GET")
+	router.HandleFunc("/api/v1/workers/{worker}/system", h.WorkerSystem).Methods("GET")
 	router.HandleFunc("/api/v1/workers/{worker}/models/{model}/start", h.WorkerStartModel).Methods("POST")
 	router.HandleFunc("/api/v1/workers/{worker}/models/{model}/stop", h.WorkerStopModel).Methods("DELETE")
 	router.HandleFunc("/api/v1/fleet", h.GetFleet).Methods("GET")
@@ -714,5 +716,114 @@ func TestListModelsSortedByName(t *testing.T) {
 	}
 	if got := strings.Join(names, ","); got != "alpha,beta,gamma" {
 		t.Fatalf("model order = %q, want %q", got, "alpha,beta,gamma")
+	}
+}
+
+type fakeSystemProvider struct{ snap metrics.Snapshot }
+
+func (f fakeSystemProvider) Snapshot() metrics.Snapshot { return f.snap }
+
+func TestGetSystemReturnsSnapshot(t *testing.T) {
+	h, _, _ := newTestHandler(t, `{"models":[]}`)
+	h.system = fakeSystemProvider{snap: metrics.Snapshot{
+		CPU:    metrics.CPUStats{UsagePercent: 12.5, Cores: 8, Model: "Test CPU"},
+		Memory: metrics.MemoryStats{UsedBytes: 8 << 30, TotalBytes: 16 << 30, UsagePercent: 50},
+		GPU:    metrics.GPUStats{Available: true, UsagePercent: 42, Name: "Test GPU"},
+	}}
+
+	rr := httptest.NewRecorder()
+	h.GetSystem(rr, httptest.NewRequest("GET", "/api/v1/system", nil))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
+	}
+	var payload struct {
+		Success bool             `json:"success"`
+		Data    metrics.Snapshot `json:"data"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.Success || payload.Data.CPU.UsagePercent != 12.5 || !payload.Data.GPU.Available {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+	if payload.Data.Memory.TotalBytes != 16<<30 {
+		t.Fatalf("memory total = %d", payload.Data.Memory.TotalBytes)
+	}
+}
+
+func TestWorkerSystemPassthrough(t *testing.T) {
+	_, reg := newFakeWorker(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/system" {
+			writeJSON(t, w, http.StatusOK, models.APIResponse{
+				Success: true,
+				Data: metrics.Snapshot{
+					CPU:    metrics.CPUStats{UsagePercent: 33.3, Cores: 8, Model: "worker cpu"},
+					Memory: metrics.MemoryStats{UsedBytes: 4 << 30, TotalBytes: 16 << 30, UsagePercent: 25},
+					GPU:    metrics.GPUStats{Available: false},
+				},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	h, _, _ := newTestHandlerWith(t, `{"models":[]}`, reg, nil)
+
+	rr := httptest.NewRecorder()
+	fleetTestRouter(h).ServeHTTP(rr, httptest.NewRequest("GET", "/api/v1/workers/fake/system", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
+	}
+	var payload struct {
+		Success bool             `json:"success"`
+		Data    metrics.Snapshot `json:"data"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.Success || payload.Data.CPU.UsagePercent != 33.3 || payload.Data.CPU.Cores != 8 {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}
+
+func TestWorkerSystemUnsupportedPassesThrough404(t *testing.T) {
+	_, reg := newFakeWorker(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	h, _, _ := newTestHandlerWith(t, `{"models":[]}`, reg, nil)
+
+	rr := httptest.NewRecorder()
+	fleetTestRouter(h).ServeHTTP(rr, httptest.NewRequest("GET", "/api/v1/workers/fake/system", nil))
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestGetRunningModelReturnsData(t *testing.T) {
+	cmd := "sleep 30"
+	configs := map[string]*models.ModelConfig{
+		"sleeper": {Name: "sleeper", LaunchCmd: &cmd},
+	}
+	h, _, _ := newTestHandlerWith(t, `{"models":[{"name":"sleeper","launch_cmd":"sleep 30"}]}`, nil, configs)
+	t.Cleanup(func() { _ = h.manager.StopCurrent() })
+
+	if err := h.manager.StartModel("sleeper"); err != nil {
+		t.Fatalf("StartModel: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	h.GetRunningModel(rr, httptest.NewRequest("GET", "/api/v1/models/running", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
+	}
+	var payload struct {
+		Success bool                 `json:"success"`
+		Data    models.RunningServer `json:"data"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.Success || payload.Data.ModelConfig.Name != "sleeper" {
+		t.Fatalf("unexpected payload: %+v", payload)
 	}
 }

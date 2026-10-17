@@ -2,7 +2,7 @@
 
 **Goal:** one simple, portable app to view and control `llm_server_manager` instances running on multiple machines.
 
-**Status:** implemented. The UI shipped and was later redesigned (Apple-inspired); it also gained syntax-highlighted config editing with `ETag`/`If-Match` conflict handling and a per-machine proxy switch. See `README.md` (Web UI) and `AGENTS.md` (Web UI section) for the current behaviour; this document describes the original proposal.
+**Status:** implemented. The UI shipped and was later redesigned (Apple-inspired); it also gained syntax-highlighted config editing with `ETag`/`If-Match` conflict handling, a per-machine proxy switch, and per-machine host telemetry (CPU / GPU / memory) on the fleet page. See `README.md` (Web UI) and `AGENTS.md` (Web UI section) for the current behaviour; this document describes the original proposal.
 
 ---
 
@@ -14,7 +14,7 @@
 | 2 | Start / stop a model | Start from a machine's model list; stop with a one-click confirm from the card or detail view |
 | 3 | *(optional)* Edit LLM configs and save | Config editor view per machine; saves via a **new** `PUT /api/v1/config` endpoint on the manager (see §3) |
 
-Out of scope: logs streaming, metrics/charts, multi-user auth, model uploads.
+Out of scope: logs streaming, multi-user auth, model uploads.
 
 ---
 

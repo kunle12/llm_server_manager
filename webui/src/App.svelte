@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import Icon from './lib/Icon.svelte'
   import { hash } from './lib/router'
-  import { bootstrapLocalMachine, refreshAll, settings } from './lib/store'
+  import { bootstrapLocalMachine, refreshAll, setPollingActive, settings } from './lib/store'
   import Toasts from './lib/Toasts.svelte'
   import ConfigEditor from './views/ConfigEditor.svelte'
   import Fleet from './views/Fleet.svelte'
@@ -13,6 +13,9 @@
 
   const parts = $derived($hash.replace(/^#\/?/, '').split('/').filter(Boolean))
   const view = $derived(parts[0] ?? 'fleet')
+  // The render below falls back to Fleet for any unknown route, so polling
+  // must follow the rendered view, not only the literal "#/fleet" hash.
+  const onFleet = $derived(!(view === 'machine' && !!parts[1]))
 
   const pollOptions = [2000, 5000, 10000, 30000]
 
@@ -33,21 +36,32 @@
     document.documentElement.dataset.theme = $settings.theme
   })
 
+  // Public fleet status is only polled while the Fleet view is on screen.
+  let lastOnFleet: boolean | null = null
+  $effect(() => {
+    const active = onFleet
+    setPollingActive(active)
+    if (active && lastOnFleet === false) {
+      void refreshAll()
+    }
+    lastOnFleet = active
+  })
+
   // Attach the manager that served this UI on first run, then load its fleet.
   onMount(async () => {
     await bootstrapLocalMachine()
-    await refreshAll()
+    if (onFleet) await refreshAll()
   })
 </script>
 
 <header>
-  <a class="brand" href="#/fleet">
+  <a class="brand" href="#/fleet" aria-label="LLM Fleet Manager">
     <span class="brand-mark"><Icon name="bolt" size={15} /></span>
     <span>LLM Fleet Manager</span>
   </a>
   <div class="spacer"></div>
 
-  {#if view === 'fleet'}
+  {#if onFleet}
     <label class="poll-label">
       <span>Auto-refresh</span>
       <select value={$settings.pollMs} onchange={setPollMs} title="Poll interval">

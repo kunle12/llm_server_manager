@@ -120,8 +120,10 @@ func (r *Registry) load(specs []config.WorkerConfig) {
 		}
 		if w.Name == LocalMachine {
 			// "local" is the coordinator's own machine name in fleet views
-			// and routing; a worker claiming it makes views ambiguous.
-			r.logger("Warning: worker name %q is reserved for the coordinator itself; choose a different name", w.Name)
+			// and routing; a worker claiming it makes views ambiguous, so it
+			// is skipped rather than silently shadowing the local machine.
+			r.logger("Warning: worker name %q is reserved for the coordinator itself; skipping it", w.Name)
+			continue
 		}
 		seen[w.Name] = true
 		workers = append(workers, w)

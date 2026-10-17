@@ -16,6 +16,9 @@ go build -o llm_server_manager .
 # Build the server with the web UI embedded (see Web UI section)
 make build-ui
 
+# Build all release binaries into dist/ (UI first; gitignored artifacts)
+make dist
+
 # Build the CLI tool
 cd tools/cli && go build -o llm-cli && cd ..
 
@@ -80,6 +83,7 @@ See [tools/cli/README.md](tools/cli/README.md) for full CLI documentation.
 
 - Go 1.21 or later
 - llama.cpp installed and available in PATH (set `LLAMA_SERVER_PATH` to override, defaults to `llama-server`)
+- Node.js 18+ and npm for building the web UI/release binaries
 
 ### Running Tests
 
@@ -89,6 +93,9 @@ go test ./...
 
 # Race detector (the config watcher and manager state are concurrency-sensitive)
 go test -race ./...
+
+# On macOS SDK setups where the cgo/race link step fails, use the internal linker:
+CGO_ENABLED=1 go test -race -ldflags='-linkmode=internal' ./...
 ```
 
 ## High-Level Architecture
@@ -206,16 +213,18 @@ The `manager` package handles llama.cpp process lifecycle:
 - `GET /api/v1/models`: List all configured models (includes `active` field)
 - `POST /api/v1/models/{model}/start`: Start a model server
 - `DELETE /api/v1/models/{model}/stop`: Stop a model server
-- `GET /api/v1/models/running`: Get currently running model
+- `GET /api/v1/models/running`: Get the running model (or `success:false`, "no model is operating"); on success `data` is the `RunningServer` (model config, PID, status, start time)
 - `GET /api/v1/config`: Return the raw config file (body is the file itself, not the envelope); response carries an `ETag` (content hash) and supports conditional `If-None-Match` (304)
 - `PUT /api/v1/config`: Validate and atomically write a new config (raw JSON body); reloads immediately, with the file watcher as fallback. Honours `If-Match` for optimistic concurrency — a stale validator returns `409 Conflict` (and the current `ETag`) instead of overwriting; `If-Match` omitted keeps the old unconditional behaviour
 - `GET /api/v1/workers`: Worker list with health (coordinator mode; empty when standalone)
 - `GET /api/v1/fleet`: Aggregated view of the local machine (first) and all workers
 - `GET /api/v1/workers/{worker}/models`: A worker's model list (`{worker}` = config name or URL host)
+- `GET /api/v1/workers/{worker}/system`: A worker's host telemetry, proxied through the coordinator so its API key stays server-side; old workers answer 404 (`{worker}` = config name or URL host)
 - `POST /api/v1/workers/{worker}/models/{model}/start`: Start a model on that worker
 - `DELETE /api/v1/workers/{worker}/models/{model}/stop`: Stop a model on that worker
 - `GET /v1/models`: OpenAI-format model list (proxy mode only; only running models, alias when set)
 - `GET /api/v1/proxy`: Runtime proxy state (`{enabled}`) so the UI can show/toggle it
+- `GET /api/v1/system`: Host resource telemetry for the per-machine UI metrics (`cpu`, `memory`, `gpu`, plus load/hostname/platform). CPU and memory are read from the OS directly (no cgo); GPU is best-effort from `nvidia-smi`, `rocm-smi`, or the macOS IORegistry. A missing source returns `gpu.available: false` rather than an error
 - `POST /v1/chat/completions`, `POST /v1/completions`, `POST /v1/embeddings`: Proxied to the machine running the requested model (SSE streaming supported; errors in OpenAI format)
 
 **Features**:
@@ -223,6 +232,16 @@ The `manager` package handles llama.cpp process lifecycle:
 - Consistent JSON response format
 - Input validation
 - Error handling with appropriate HTTP status codes
+
+### 2.1 System Telemetry (metrics/)
+
+`GET /api/v1/system` is served by `metrics.Collector` (`metrics/metrics.go`) and is independent of the model manager. It is strictly request-driven: there is no background telemetry loop, so a closed UI produces no samples.
+
+- **CPU / memory / load**: read from the OS directly (no cgo): `/proc/stat` + `/proc/meminfo` on Linux, `top` + `vm_stat` + `sysctl` on macOS (`metrics/sampler_*.go`). The CPU sampler keeps the previous `/proc/stat` counters on Linux and takes a fresh 100ms sample when the baseline is stale (>2min); macOS uses `top -l 1` cached for 2s.
+- **GPU**: best-effort by trying `nvidia-smi` (NVIDIA, CSV), `rocm-smi` (AMD, JSON), then `ioreg -c IOAccelerator` on macOS. Parsers accept multiple GPUs, aggregate memory, and take the highest utilization. No vendor tool → `gpu.available: false`; the rest of the snapshot is still valid. Commands are fixed-argument execs with a timeout, cached for 2s.
+- **Workers**: `GET /api/v1/workers/{worker}/system` proxies a worker's `/api/v1/system` through the coordinator (`fleet.Worker.System`), keeping worker API keys out of the browser. A 404 from an older worker is passed through unchanged.
+- **Concurrency**: CPU, memory, load and GPU collection run in parallel; per-sampler mutexes protect the CPU counters and GPU cache. `TestCollectorConcurrentSnapshots` exercises this under `-race`.
+- The handler depends on the small `metrics.Provider` interface, so tests inject a deterministic snapshot (`TestGetSystemReturnsSnapshot`).
 
 ### 3. Configuration (config/config.go + models/models.go)
 
@@ -259,7 +278,7 @@ The `manager` package handles llama.cpp process lifecycle:
 }
 ```
 
-**Coordinator mode** is enabled by a non-empty `workers` list: the instance can then list, start, and stop models on remote llm_server_manager instances (which run today's binary unchanged). `proxy: true` additionally exposes OpenAI-compatible `/v1/...` routes (Phase 2). Both keys are optional; without them the instance behaves exactly as a standalone manager. The `proxy` key can be toggled at runtime (web UI switch, or editing the config): the `/v1` routes are always registered and gated by an in-memory flag, so a reload applies the change without a restart; when off they answer the proxy's OpenAI-format 404. See `docs/coordinator-design.md` for the full design.
+**Coordinator mode** is enabled by a non-empty `workers` list: the instance can then list, start, and stop models on remote llm_server_manager instances. Workers run the same binary; per-worker CPU/GPU/memory metrics require a worker built from this version or newer (older workers still support model control). Worker names should be unique; the name `local` is reserved for the coordinator itself and such an entry is skipped with a warning. `proxy: true` additionally exposes OpenAI-compatible `/v1/...` routes (Phase 2). Both keys are optional; without them the instance behaves exactly as a standalone manager. The `proxy` key can be toggled at runtime (web UI switch, or editing the config): the `/v1` routes are always registered and gated by an in-memory flag, so a reload applies the change without a restart; when off they answer the proxy's OpenAI-format 404. See `docs/coordinator-design.md` for the full design.
 
 **ModelConfig Fields**:
 - `name`: Unique identifier (required; entries without a name are skipped — see Development Notes)
@@ -511,6 +530,12 @@ A Svelte 5 + Vite + TypeScript single-page app for viewing and controlling `llm_
 
 **Coordinator support:** the fleet view probes `GET /api/v1/fleet` first; when a machine answers it, one card per fleet machine (local + workers) is rendered, with start/stop routed to the right endpoints (local vs worker-scoped) — this is the client-side "start anywhere" flow. Machines that answer 404 (legacy binary) fall back to the single-card view. Model aliases are shown as `name → alias` where relevant.
 
+**Live system metrics:** every fleet row shows that machine's own CPU, GPU and memory usage beside its info (local machine and each worker), sampled by the same poller as the fleet (`refreshSystem` in `store.ts`, keyed by `systemKey(machineId, entry)`). The client keeps a 48-sample history per entry (`systemHistory`) so each metric renders a task-manager-style bar chart. Local stats come from `GET /api/v1/system`; worker stats are proxied through `GET /api/v1/workers/{worker}/system` so worker API keys stay server-side. Older workers without the endpoint show "stats unavailable" instead of an error; offline entries show an offline placeholder. GPU telemetry is optional per host (`gpu.available`). Rows stack machine info above metrics on narrow screens.
+
+**Polling scope:** all polling is request-driven in the browser — the backend has no background telemetry loop, so a closed UI produces no `/fleet`, `/system`, or worker requests. The global poller (`store.ts`) runs only while the Fleet view is mounted (`setPollingActive`), stops when the tab is hidden (`visibilitychange`), and refreshes immediately when the tab returns; bfcache restores (`pageshow` with `persisted`) are handled the same way. Telemetry sampling is additionally gated by `setTelemetryActive`, so only the Fleet view collects system stats. The Machine view keeps its own status fresh with a single-manager poll (no telemetry), and the config editor has its own visibility-aware `ETag` polling.
+
+**Mobile layout:** the fleet page and metrics are responsive. Below 900px each machine row stacks info above metrics; metric tiles become two columns below 560px and one column below 360px. The header drops the wordmark (keeping an accessible label) below 480px so the controls fit, and page-head action rows wrap instead of overflowing. The model list switches from a table to stacked rows below 640px, hiding an empty port line. Form controls and the config editor use 16px text on phones to prevent iOS Safari's focus zoom. Tested with iPhone 13 (WebKit) and Pixel 5 (Chromium) device emulation, plus 320px width with no horizontal page overflow.
+
 **Local auto-attach:** on first load with an empty machine list, the app probes the origin that served it (`GET /api/v1/models`, 3s timeout) and, when that origin answers with the manager JSON envelope (200, or 401 when a key is required), seeds a "This machine" entry for it. A static host or the Vite dev server returns HTML, which fails the check, so those setups stay manual. Machines are still fully editable/removable in Settings.
 
 **Config editing / concurrent changes:** the editor loads the file with its `ETag` and polls (`If-None-Match`, on the same interval as the rest of the UI). A clean editor silently follows edits made on disk; a dirty editor shows a banner with *Reload from disk* / *Keep editing*. Saves send `If-Match`, so if the file changed underneath, the server answers `409` and the editor shows a conflict banner (*Reload (discard mine)* / *Overwrite anyway*) instead of clobbering the other change.
@@ -530,13 +555,16 @@ webui/
     │   ├── store.ts           # machine registry + settings (localStorage) + poller
     │   ├── router.ts          # hash router (#/fleet, #/machine/{id}, #/machine/{id}/config)
     │   ├── Icon.svelte        # small line-icon set (SF-Symbols style)
+    │   ├── MetricChart.svelte # bar-history chart used by the system metrics
+    │   ├── MachineMetrics.svelte # one fleet entry's CPU/GPU/memory tiles
+    │   ├── SystemMetric.svelte # one CPU/GPU/memory tile
     │   ├── highlight.ts       # tiny dependency-free JSON tokenizer for the editor
     │   ├── config-edit.ts     # format-preserving config edits (proxy key)
     │   ├── proxy.ts           # toggle the proxy via config edit + ETag
     │   ├── ProxySwitch.svelte # runtime proxy on/off switch
     │   ├── toast.ts, Toasts.svelte, types.ts
     └── views/
-        ├── Fleet.svelte       # per-machine cards; fleet view for coordinators (local + workers, start/stop)
+        ├── Fleet.svelte       # per-machine metric rows; local + workers, start/stop
         ├── Machine.svelte     # model list with start/stop (alias shown when set)
         ├── ConfigEditor.svelte # syntax-highlighted JSON editor; ETag/If-Match conflict handling
         └── SettingsDialog.svelte # manage machines, import/export fleet JSON
@@ -558,7 +586,12 @@ make build         # go build -o llm_server_manager .
 
 # Server binary WITH the UI embedded, served at /ui/ when started with -ui
 make build-ui      # make ui + go build -tags embedui
+
+# All release binaries (darwin/linux amd64+arm64 servers, UI binary, CLI)
+make dist          # runs make ui first; output is gitignored
 ```
+
+- `make dist` writes into `dist/` (gitignored): `llm_server_manager-{darwin,linux}-{amd64,arm64}`, `llm_server_manager-ui-darwin-arm64`, and `llm-cli-{darwin,linux}-{amd64,arm64}`.
 
 - Embedding is gated behind the `embedui` build tag (`server/ui_embed.go` / `server/ui_noembed.go`); the assets live in `server/webui/dist/` (populated by `make ui`, gitignored except `.keep`).
 - `server/ui.go` registers `/ui` and `/ui/` routes at `Start()` only when `App.ServeUI` is set (main.go sets it from `-ui`) and the assets were embedded.
@@ -566,5 +599,6 @@ make build-ui      # make ui + go build -tags embedui
 
 ### Fleet UI tests
 
-- `handlers/handlers_test.go`: config endpoint behaviour (raw GET, validated atomic PUT with reload callback, rejection cases, large bodies, `ETag`/`If-Match` conditional save with `409` on staleness); fleet/worker endpoints with fake workers (online/offline/401 pass-through, 502 on transport failures)
+- `handlers/handlers_test.go`: config endpoint behaviour (raw GET, validated atomic PUT with reload callback, rejection cases, large bodies, `ETag`/`If-Match` conditional save with `409` on staleness); fleet/worker endpoints with fake workers (online/offline/401 pass-through, 502 on transport failures); system stats endpoint with an injected provider and worker-system proxy pass-through/404; `GET /models/running` payload; reserved `local` worker skipping
+- `metrics/metrics_test.go`: NVIDIA/ROCm/IORegistry parser fixtures, live `Collector` snapshot, and concurrent `Snapshot` calls under the race detector
 - `server/server_test.go`: body-limit exemption for `PUT /api/v1/config` through the full middleware chain; proxy wiring (`/v1` routes with Bearer auth, body-limit exemption, OpenAI-format 404s, disabled-by-default)

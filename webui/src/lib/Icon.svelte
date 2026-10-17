@@ -35,6 +35,13 @@
     external:
       '<path d="M14 5h5v5M19 5l-8 8M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
     box: '<path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z"/><path d="m4 7 8 4 8-4M12 11v10"/>',
+    cpu:
+      '<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M9 3v4M15 3v4M9 17v4M15 17v4M3 9h4M3 15h4M17 9h4M17 15h4"/>',
+    gpu:
+      '<rect x="2.5" y="6" width="19" height="12" rx="2.2"/><circle cx="8" cy="12" r="2.4"/><path d="M13 10h5M13 14h5M6 4v2M18 4v2M6 18v2M18 18v2"/>',
+    memory:
+      '<rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 10v4M11 10v4M15 10v4M17 17v3M7 17v3M12 17v3"/>',
+    activity: '<path d="M3 12h4l2.5-7 4 14 2.5-7H21"/>',
   }
 </script>
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -560,5 +561,55 @@ func TestProxyTogglesLiveWithoutRestart(t *testing.T) {
 	}
 	if proxyEnabled() {
 		t.Fatal("proxy status should be false after disabling via reload")
+	}
+}
+
+// TestSystemEndpointWiring checks that GET /api/v1/system is registered behind
+// the API router and returns the telemetry envelope with no-store caching.
+func TestSystemEndpointWiring(t *testing.T) {
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "llama-server")
+	if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LLAMA_SERVER_PATH", fakeBin)
+
+	configPath := filepath.Join(dir, "llm_config.json")
+	if err := os.WriteFile(configPath, []byte(`{"models":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app, err := New(configPath, false, 6)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	app.router.ServeHTTP(rr, httptest.NewRequest("GET", "/api/v1/system", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+
+	var payload struct {
+		Success bool `json:"success"`
+		Data    struct {
+			CPU struct {
+				Cores int `json:"cores"`
+			} `json:"cpu"`
+			Memory struct {
+				TotalBytes uint64 `json:"total_bytes"`
+			} `json:"memory"`
+			GPU struct {
+				Available bool `json:"available"`
+			} `json:"gpu"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.Success || payload.Data.CPU.Cores <= 0 {
+		t.Fatalf("unexpected payload: %+v", payload)
 	}
 }

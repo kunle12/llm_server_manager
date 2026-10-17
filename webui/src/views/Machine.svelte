@@ -1,8 +1,9 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import Icon from '../lib/Icon.svelte'
   import ProxySwitch from '../lib/ProxySwitch.svelte'
   import { listModels, startModel, stopModel } from '../lib/api'
-  import { machines, refreshMachine, refreshProxy, statuses } from '../lib/store'
+  import { machines, refreshMachineStatus, refreshProxy, settings, statuses } from '../lib/store'
   import { toast } from '../lib/toast'
   import type { ModelItem } from '../lib/types'
 
@@ -16,6 +17,7 @@
   let loadError = $state('')
   let busyModel = $state<string | null>(null)
   let confirmStop = $state(false)
+  let visible = $state(typeof document === 'undefined' ? true : !document.hidden)
 
   const runningModel = $derived(status?.state === 'running' ? status.model : null)
 
@@ -26,7 +28,7 @@
     try {
       const list = await listModels(machine)
       models = list
-      await refreshMachine(machine)
+      await refreshMachineStatus(machine)
       await refreshProxy(machine)
     } catch (e) {
       loadError = e instanceof Error ? e.message : String(e)
@@ -35,10 +37,63 @@
     }
   }
 
+  /** Refresh the table after start/stop without the full-page loading state. */
+  async function reloadModels() {
+    if (!machine) return
+    try {
+      models = await listModels(machine)
+    } catch {
+      // Keep the current table; the status/error is already surfaced by the header.
+    }
+  }
+
+  // Prevent a slow status poll from overlapping the next interval tick.
+  let pollingStatus = false
+  async function pollStatus() {
+    if (!machine || pollingStatus) return
+    pollingStatus = true
+    try {
+      await refreshMachineStatus(machine)
+      await refreshProxy(machine)
+    } finally {
+      pollingStatus = false
+    }
+  }
+
   // Reload whenever the machine (id) changes.
   $effect(() => {
     void machine
     load()
+  })
+
+  // Keep the machine status live while this page is visible. Only this one
+  // manager is polled; system telemetry remains Fleet-only.
+  $effect(() => {
+    void machine
+    const period = $settings.pollMs
+    if (!machine || $settings.paused || !visible) return
+    const timer = setInterval(() => {
+      void pollStatus()
+    }, period)
+    return () => clearInterval(timer)
+  })
+
+  onMount(() => {
+    const wake = () => {
+      visible = !document.hidden
+      if (visible && machine) {
+        void pollStatus()
+      }
+    }
+    const restored = (event: PageTransitionEvent) => {
+      if (event.persisted) wake()
+    }
+    document.addEventListener('visibilitychange', wake)
+    window.addEventListener('pageshow', restored)
+    return () => {
+      document.removeEventListener('visibilitychange', wake)
+      window.removeEventListener('pageshow', restored)
+    }
   })
 
   async function doStart(name: string) {
@@ -51,7 +106,8 @@
       toast('err', `Start failed: ${e instanceof Error ? e.message : e}`)
     } finally {
       busyModel = null
-      await refreshMachine(machine)
+      await refreshMachineStatus(machine)
+      await reloadModels()
     }
   }
 
@@ -66,7 +122,8 @@
     } finally {
       busyModel = null
       confirmStop = false
-      await refreshMachine(machine)
+      await refreshMachineStatus(machine)
+      await reloadModels()
     }
   }
 </script>
@@ -136,7 +193,7 @@
               <td class="path" title={item.launch_cmd || item.model_path}>
                 {item.launch_cmd || item.model_path}
               </td>
-              <td>{item.port ?? ''}</td>
+              <td class="port">{item.port ?? ''}</td>
               <td class="actions">
                 {#if item.active}
                   {#if confirmStop}

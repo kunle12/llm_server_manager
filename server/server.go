@@ -400,10 +400,12 @@ func (a *App) setupRouter() {
 	// workers configured the list/fleet views just contain the local machine.
 	api.HandleFunc("/workers", a.handler.ListWorkers).Methods("GET")
 	api.HandleFunc("/workers/{worker}/models", a.handler.WorkerListModels).Methods("GET")
+	api.HandleFunc("/workers/{worker}/system", a.handler.WorkerSystem).Methods("GET")
 	api.HandleFunc("/workers/{worker}/models/{model}/start", a.handler.WorkerStartModel).Methods("POST")
 	api.HandleFunc("/workers/{worker}/models/{model}/stop", a.handler.WorkerStopModel).Methods("DELETE")
 	api.HandleFunc("/fleet", a.handler.GetFleet).Methods("GET")
 	api.HandleFunc("/proxy", a.handler.GetProxyStatus).Methods("GET")
+	api.HandleFunc("/system", a.handler.GetSystem).Methods("GET")
 
 	// OpenAI-compatible proxy (/v1). Routes are always registered and gated by
 	// the runtime flag so toggling "proxy" in the config is live; when off they

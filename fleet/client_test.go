@@ -418,3 +418,22 @@ func TestRegistryConcurrentAccess(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestRegistrySkipsReservedLocalWorker(t *testing.T) {
+	var warned bool
+	reg := NewRegistry([]config.WorkerConfig{
+		{URL: "http://remote.local:8080", Name: "local"},
+		{URL: "http://other.local:8080", Name: "other"},
+	}, func(format string, args ...interface{}) {
+		if strings.Contains(format, "reserved") {
+			warned = true
+		}
+	})
+	if !warned {
+		t.Fatal("reserved worker name should warn")
+	}
+	workers := reg.Workers()
+	if len(workers) != 1 || workers[0].Name != "other" {
+		t.Fatalf("workers = %+v, want only 'other'", workers)
+	}
+}

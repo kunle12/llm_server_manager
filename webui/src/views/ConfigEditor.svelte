@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import Icon from '../lib/Icon.svelte'
   import { highlightJSON } from '../lib/highlight'
   import { ApiError, fetchConfig, saveConfig, type ConfigSnapshot } from '../lib/api'
@@ -8,6 +9,8 @@
   let { id }: { id: string } = $props()
 
   const machine = $derived($machines.find((m) => m.id === id) ?? null)
+
+  let visible = $state(typeof document === 'undefined' ? true : !document.hidden)
 
   let text = $state('')
   let savedText = $state('')
@@ -113,10 +116,27 @@
   }
 
   $effect(() => {
-    if (!machine || $settings.paused) return
+    if (!machine || $settings.paused || !visible) return
     const period = $settings.pollMs
     const timer = setInterval(() => void checkRemote(), period)
     return () => clearInterval(timer)
+  })
+
+  // Config polling is just as unnecessary in a hidden tab as fleet polling.
+  onMount(() => {
+    const visibleAgain = () => {
+      visible = !document.hidden
+      if (visible) void checkRemote()
+    }
+    const pageRestored = (event: PageTransitionEvent) => {
+      if (event.persisted) visibleAgain()
+    }
+    document.addEventListener('visibilitychange', visibleAgain)
+    window.addEventListener('pageshow', pageRestored)
+    return () => {
+      document.removeEventListener('visibilitychange', visibleAgain)
+      window.removeEventListener('pageshow', pageRestored)
+    }
   })
 
   // Warn before closing the tab with unsaved changes.
@@ -124,6 +144,8 @@
     if (!dirty) return
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault()
+      // Safari and older Chromium need returnValue for the confirmation.
+      e.returnValue = ''
     }
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)

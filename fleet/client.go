@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"llamamanager/config"
+	"llamamanager/metrics"
 	"llamamanager/models"
 )
 
@@ -171,6 +172,27 @@ func (w *Worker) GetRunning(ctx context.Context) (*RunningModel, error) {
 		return nil, err
 	}
 	return RunningFromItems(items), nil
+}
+
+// System returns the worker's host telemetry. Older workers without
+// GET /api/v1/system answer 404, which callers can treat as "unsupported".
+func (w *Worker) System(ctx context.Context) (*metrics.Snapshot, error) {
+	data, err := w.call(ctx, http.MethodGet, "/api/v1/system", w.readTimeout)
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		Success bool             `json:"success"`
+		Message string           `json:"message"`
+		Data    metrics.Snapshot `json:"data"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, fmt.Errorf("worker %s returned a malformed system payload: %w", w.Name, err)
+	}
+	if !payload.Success {
+		return nil, fmt.Errorf("worker %s: %s", w.Name, payload.Message)
+	}
+	return &payload.Data, nil
 }
 
 // RunningFromItems finds the active model in a models list and renders it as

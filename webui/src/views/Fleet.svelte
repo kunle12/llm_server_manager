@@ -1,20 +1,32 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
   import Icon from '../lib/Icon.svelte'
+  import MachineMetrics from '../lib/MachineMetrics.svelte'
   import ProxySwitch from '../lib/ProxySwitch.svelte'
-  import { machines, fleetViews, refreshMachine, statuses } from '../lib/store'
+  import {
+    machines,
+    fleetViews,
+    refreshMachine,
+    setTelemetryActive,
+    statuses,
+    systemErrors,
+    systemHistory,
+    systemKey,
+    systemStats,
+  } from '../lib/store'
   import { startModel, stopModel, workerStartModel, workerStopModel } from '../lib/api'
   import { toast } from '../lib/toast'
   import type { FleetMachine, ModelItem } from '../lib/types'
 
   let { onopenSettings }: { onopenSettings: () => void } = $props()
 
+  // Telemetry requests are only made while this view is mounted.
+  setTelemetryActive(true)
+  onDestroy(() => setTelemetryActive(false))
+
   let confirmStop = $state<string | null>(null)
   let busy = $state<string | null>(null)
   let pickedModel = $state<Record<string, string>>({})
-
-  function key(machineId: string, entryMachine: string): string {
-    return `${machineId}::${entryMachine}`
-  }
 
   function displayName(item: ModelItem): string {
     return item.alias || item.name
@@ -48,7 +60,7 @@
   async function doStop(machineId: string, entry: FleetMachine, model: string) {
     const m = $machines.find((x) => x.id === machineId)
     if (!m || !model) return
-    const k = key(machineId, entry.machine)
+    const k = systemKey(machineId, entry.machine)
     busy = k
     try {
       const res = isLocal(entry)
@@ -72,7 +84,7 @@
   async function doStart(machineId: string, entry: FleetMachine) {
     const m = $machines.find((x) => x.id === machineId)
     if (!m) return
-    const k = key(machineId, entry.machine)
+    const k = systemKey(machineId, entry.machine)
     const model = pickedModel[k]
     if (!model) return
     busy = k
@@ -111,7 +123,7 @@
     </button>
   </div>
 {:else}
-  <div class="grid">
+  <div class="fleet-cards">
     {#each $machines as m (m.id)}
       {@const fv = $fleetViews[m.id]}
       {#if fv === undefined}
@@ -138,77 +150,88 @@
 
           <ul class="entries">
             {#each fv as entry (entry.machine)}
-              {@const k = key(m.id, entry.machine)}
-              <li class="entry">
-                <div class="entry-head">
-                  <span class="dot {entry.status}"></span>
-                  <span class="entry-name">{entry.machine}</span>
-                  {#if isLocal(entry)}<span class="tag">this machine</span>{/if}
-                </div>
+              {@const k = systemKey(m.id, entry.machine)}
+              <li class="entry entry-row">
+                <div class="entry-info">
+                  <div class="entry-head">
+                    <span class="dot {entry.status}"></span>
+                    <span class="entry-name">{entry.machine}</span>
+                    {#if isLocal(entry)}<span class="tag">this machine</span>{/if}
+                  </div>
 
-                {#if entry.status === 'online'}
-                  {#if entry.running}
-                    <div class="entry-body">
-                      <span class="entry-model">{entry.running.alias || entry.running.name}</span>
-                      {#if entry.running.port}
-                        <span class="muted">running on port {entry.running.port}</span>
+                  {#if entry.status === 'online'}
+                    {#if entry.running}
+                      <div class="entry-body">
+                        <span class="entry-model">{entry.running.alias || entry.running.name}</span>
+                        {#if entry.running.port}
+                          <span class="muted">port {entry.running.port}</span>
+                        {:else}
+                          <span class="muted">running</span>
+                        {/if}
+                      </div>
+                      {#if confirmStop === k}
+                        <div class="confirm">
+                          <span>Stop {entry.running.alias || entry.running.name}?</span>
+                          <button
+                            class="btn danger"
+                            disabled={busy === k}
+                            onclick={() => doStop(m.id, entry, entry.running!.name)}
+                          >
+                            Stop
+                          </button>
+                          <button class="btn subtle" onclick={() => (confirmStop = null)}>Cancel</button>
+                        </div>
                       {:else}
-                        <span class="muted">running</span>
+                        <div class="row end">
+                          <button
+                            class="btn danger"
+                            disabled={busy === k}
+                            onclick={() => (confirmStop = k)}
+                          >
+                            <Icon name="stop" size={16} /> Stop
+                          </button>
+                        </div>
                       {/if}
-                    </div>
-                    {#if confirmStop === k}
-                      <div class="confirm">
-                        <span>Stop {entry.running.alias || entry.running.name}?</span>
-                        <button
-                          class="btn danger"
-                          disabled={busy === k}
-                          onclick={() => doStop(m.id, entry, entry.running!.name)}
+                    {:else if selectable(entry).length > 0}
+                      <div class="row startrow">
+                        <select
+                          class="select"
+                          value={pickedModel[k] ?? ''}
+                          onchange={(e) =>
+                            (pickedModel = {
+                              ...pickedModel,
+                              [k]: (e.currentTarget as HTMLSelectElement).value,
+                            })}
                         >
-                          Stop
+                          <option value="">Start a model…</option>
+                          {#each selectable(entry) as item (item.name)}
+                            <option value={item.name}>{displayName(item)}</option>
+                          {/each}
+                        </select>
+                        <button
+                          class="btn primary"
+                          disabled={busy === k || !pickedModel[k]}
+                          onclick={() => doStart(m.id, entry)}
+                        >
+                          <Icon name="play" size={13} /> Start
                         </button>
-                        <button class="btn subtle" onclick={() => (confirmStop = null)}>Cancel</button>
                       </div>
                     {:else}
-                      <div class="row end">
-                        <button
-                          class="btn danger"
-                          disabled={busy === k}
-                          onclick={() => (confirmStop = k)}
-                        >
-                          <Icon name="stop" size={16} /> Stop
-                        </button>
-                      </div>
+                      <p class="muted entry-note">No models configured</p>
                     {/if}
-                  {:else if selectable(entry).length > 0}
-                    <div class="row startrow">
-                      <select
-                        class="select"
-                        value={pickedModel[k] ?? ''}
-                        onchange={(e) =>
-                          (pickedModel = {
-                            ...pickedModel,
-                            [k]: (e.currentTarget as HTMLSelectElement).value,
-                          })}
-                      >
-                        <option value="">Start a model…</option>
-                        {#each selectable(entry) as item (item.name)}
-                          <option value={item.name}>{displayName(item)}</option>
-                        {/each}
-                      </select>
-                      <button
-                        class="btn primary"
-                        disabled={busy === k || !pickedModel[k]}
-                        onclick={() => doStart(m.id, entry)}
-                      >
-                        <Icon name="play" size={13} /> Start
-                      </button>
-                    </div>
                   {:else}
-                    <p class="muted entry-note">No models configured</p>
+                    <p class="entry-error">{friendlyError(entry.error)}</p>
                   {/if}
-                {:else}
-                  <p class="entry-error">{friendlyError(entry.error)}</p>
-                {/if}
+                </div>
+
+                <div class="entry-metrics">
+                  <MachineMetrics
+                    snapshot={$systemStats[k]}
+                    history={$systemHistory[k] ?? []}
+                    error={$systemErrors[k]}
+                    offline={entry.status !== 'online'}
+                  />
+                </div>
               </li>
             {/each}
           </ul>
@@ -226,6 +249,7 @@
         </article>
       {:else}
         {@const st = $statuses[m.id] ?? { state: 'checking' }}
+        {@const lk = systemKey(m.id, 'local')}
         <article class="card machine">
           <div class="machine-head">
             <div class="machine-title">
@@ -236,43 +260,56 @@
             <span class="pill {st.state}">{st.state}</span>
           </div>
 
-          <div class="entry">
-            {#if st.state === 'running'}
-              <div class="entry-body">
-                <span class="entry-model">{st.model}</span>
-                <span class="muted">running</span>
+          <ul class="entries">
+            <li class="entry entry-row">
+              <div class="entry-info">
+                {#if st.state === 'running'}
+                  <div class="entry-body">
+                    <span class="entry-model">{st.model}</span>
+                    <span class="muted">running</span>
+                  </div>
+                  {#if confirmStop === lk}
+                    <div class="confirm">
+                      <span>Stop {st.model}?</span>
+                      <button
+                        class="btn danger"
+                        disabled={busy === lk}
+                        onclick={() => doStopLocal(m.id, st.model!)}
+                      >
+                        Stop
+                      </button>
+                      <button class="btn subtle" onclick={() => (confirmStop = null)}>Cancel</button>
+                    </div>
+                  {:else}
+                    <div class="row end">
+                      <button
+                        class="btn danger"
+                        disabled={busy === lk}
+                        onclick={() => (confirmStop = lk)}
+                      >
+                        <Icon name="stop" size={16} /> Stop
+                      </button>
+                    </div>
+                  {/if}
+                {:else if st.state === 'idle'}
+                  <p class="muted entry-note">No model running</p>
+                {:else if st.state === 'offline'}
+                  <p class="entry-error">{friendlyError(st.error)}</p>
+                {:else}
+                  <p class="muted entry-note">Checking…</p>
+                {/if}
               </div>
-              {#if confirmStop === m.id}
-                <div class="confirm">
-                  <span>Stop {st.model}?</span>
-                  <button
-                    class="btn danger"
-                    disabled={busy === m.id}
-                    onclick={() => doStopLocal(m.id, st.model!)}
-                  >
-                    Stop
-                  </button>
-                  <button class="btn subtle" onclick={() => (confirmStop = null)}>Cancel</button>
-                </div>
-              {:else}
-                <div class="row end">
-                  <button
-                    class="btn danger"
-                    disabled={busy === m.id}
-                    onclick={() => (confirmStop = m.id)}
-                  >
-                    <Icon name="stop" size={16} /> Stop
-                  </button>
-                </div>
-              {/if}
-            {:else if st.state === 'idle'}
-              <p class="muted entry-note">No model running</p>
-            {:else if st.state === 'offline'}
-              <p class="entry-error">{friendlyError(st.error)}</p>
-            {:else}
-              <p class="muted entry-note">Checking…</p>
-            {/if}
-          </div>
+
+              <div class="entry-metrics">
+                <MachineMetrics
+                  snapshot={$systemStats[lk]}
+                  history={$systemHistory[lk] ?? []}
+                  error={$systemErrors[lk]}
+                  offline={st.state === 'offline'}
+                />
+              </div>
+            </li>
+          </ul>
 
           <div class="machine-foot">
             <a class="link-btn" href={`#/machine/${m.id}`}>
@@ -291,8 +328,56 @@
 {/if}
 
 <style>
+  .fleet-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  /* Machine info on the left, that machine's metrics on the right. */
+  .entry-row {
+    display: grid;
+    grid-template-columns: minmax(220px, 20rem) minmax(0, 1fr);
+    gap: 1.25rem;
+    align-items: start;
+  }
+
+  .entry-info {
+    min-width: 0;
+  }
+
+  .entry-head {
+    min-width: 0;
+  }
+
+  .entry-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .entry-metrics {
+    min-width: 0;
+    padding-left: 1.25rem;
+    border-left: 1px solid var(--border);
+  }
+
   .entry-note {
     margin: 0.45rem 0 0;
     font-size: 0.88rem;
+  }
+
+  @media (max-width: 900px) {
+    .entry-row {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0.75rem;
+    }
+
+    .entry-metrics {
+      padding: 0.75rem 0 0;
+      border-left: none;
+      border-top: 1px solid var(--border);
+    }
   }
 </style>

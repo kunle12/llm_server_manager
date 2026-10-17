@@ -1,18 +1,18 @@
 <script lang="ts">
   import Icon from '../lib/Icon.svelte'
-  import { machines } from '../lib/store'
+  import { machines, newMachineId } from '../lib/store'
   import { toast } from '../lib/toast'
   import type { Machine } from '../lib/types'
 
   let { onclose }: { onclose: () => void } = $props()
 
-  let draft = $state<Machine[]>(structuredClone($machines))
+  let draft = $state<Machine[]>($machines.map((m) => ({ ...m })))
   let importText = $state('')
   let showKeys = $state(false)
 
   function normalize(m: Machine): Machine {
     return {
-      id: m.id || crypto.randomUUID(),
+      id: m.id || newMachineId(),
       name: m.name.trim() || 'machine',
       url: m.url.trim().replace(/\/+$/, ''),
       apiKey: m.apiKey.trim(),
@@ -21,7 +21,7 @@
 
   function add() {
     draft.push({
-      id: crypto.randomUUID(),
+      id: newMachineId(),
       name: `machine-${draft.length + 1}`,
       url: 'http://localhost:8080',
       apiKey: '',

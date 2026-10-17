@@ -127,6 +127,7 @@ All under auth (A); responses use the existing `APIResponse` envelope.
 | `GET /api/v1/workers` | Worker list with health: `[{name, url, status: "online"\|"offline", running_model, model_count, error?}]` (`api_key` redacted) |
 | `GET /api/v1/fleet` | Aggregated view, local machine first: `[{machine, url, status, running: {name, since, port} \| null, models: [ModelItem…]}]` — one call feeds the whole UI fleet view |
 | `GET /api/v1/workers/{worker}/models` | Passthrough of a worker's model list |
+| `GET /api/v1/workers/{worker}/system` | Passthrough of a worker's host telemetry (`/api/v1/system`) for the per-machine UI metrics |
 | `POST /api/v1/workers/{worker}/models/{model}/start` | Start on that worker; success/error body passed through |
 | `DELETE /api/v1/workers/{worker}/models/{model}/stop` | Stop on that worker |
 
@@ -134,6 +135,7 @@ Semantics:
 - The `{worker}` path segment matches the configured `name` or the URL host.
 - Worker call timeouts: 5s for reads, 30s for start/stop (model spawn takes a moment).
 - Offline workers appear as `status: "offline"` in list/fleet responses instead of failing the whole request.
+- **Per-machine metrics are client-side:** the UI fetches `/api/v1/system` for the coordinator and `/api/v1/workers/{worker}/system` for each worker, keyed per fleet entry. A 404 from an older worker renders as "stats unavailable" instead of failing the fleet view.
 - **Fleet-level "start anywhere" is client-side:** the UI/CLI picks a machine from `GET /fleet` (model configured + machine free) and calls the worker-scoped start. No dedicated endpoint.
 - `/api/v1/*` continues to use **real model names exclusively** (start/stop are not aliased); `alias` is included in payloads for display.
 
@@ -229,7 +231,7 @@ Bodies pass through untouched, **including the `model` field** — llama-server 
 | `server` | Route registration, timeout/body-limit rework, mode wiring, reload hooks |
 | `handlers` | New fleet/worker endpoints; `/v1` delegated to the proxy package |
 | CLI (Phase 4) | `llm-cli fleet`, `llm-cli start <model> --worker <name>`, `llm-cli status --fleet` |
-| Web UI (Phase 4) | Fleet view prefers `GET /api/v1/fleet` when the target answers it (capability probe), falls back to per-machine polling; alias shown as display name |
+| Web UI (Phase 4) | Fleet view prefers `GET /api/v1/fleet` when the target answers it (capability probe), falls back to per-machine polling; alias shown as display name; per-machine CPU/GPU/memory rows use `/api/v1/system` and the worker-scoped system endpoint |
 
 ---
 

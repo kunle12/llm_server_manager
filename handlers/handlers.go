@@ -20,6 +20,7 @@ import (
 	"llamamanager/config"
 	"llamamanager/fleet"
 	"llamamanager/manager"
+	"llamamanager/metrics"
 	"llamamanager/models"
 
 	"github.com/gorilla/mux"
@@ -44,6 +45,7 @@ type Handler struct {
 	configPath     string
 	onConfigSaved  func() error
 	proxyStatus    func() bool
+	system         metrics.Provider
 	// saveMu serialises the If-Match check and the file write so two
 	// concurrent saves cannot both pass the precondition (lost update).
 	saveMu sync.Mutex
@@ -96,6 +98,7 @@ func New(mgr *manager.ServerManager, fleetReg *fleet.Registry, logger func(forma
 		enabled:        enabled,
 		allowedOrigins: allowedOrigins,
 		configPath:     configPath,
+		system:         metrics.NewCollector(),
 	}
 }
 
@@ -189,6 +192,7 @@ func (h *Handler) GetRunningModel(w http.ResponseWriter, r *http.Request) {
 	h.sendJSON(w, http.StatusOK, models.APIResponse{
 		Success: true,
 		Message: fmt.Sprintf("model '%s' is currently operating", current.ModelConfig.Name),
+		Data:    current,
 	})
 }
 
@@ -293,6 +297,27 @@ func (h *Handler) WorkerListModels(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// WorkerSystem passes through a worker's host telemetry. A worker running an
+// older binary answers 404, which the UI renders as "stats unavailable".
+func (h *Handler) WorkerSystem(w http.ResponseWriter, r *http.Request) {
+	worker := h.resolveWorker(w, r)
+	if worker == nil {
+		return
+	}
+
+	snapshot, err := worker.System(r.Context())
+	if err != nil {
+		h.workerError(w, err)
+		return
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
+	h.sendJSON(w, http.StatusOK, models.APIResponse{
+		Success: true,
+		Data:    snapshot,
+	})
+}
+
 // WorkerStartModel asks a worker to start one of its configured models.
 func (h *Handler) WorkerStartModel(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
@@ -360,6 +385,17 @@ func (h *Handler) GetProxyStatus(w http.ResponseWriter, r *http.Request) {
 		Data: struct {
 			Enabled bool `json:"enabled"`
 		}{Enabled: enabled},
+	})
+}
+
+// GetSystem reports the host's CPU, memory and GPU usage for the UI. Data is
+// collected on demand and best-effort: a missing GPU tool leaves only the GPU
+// block unavailable.
+func (h *Handler) GetSystem(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	h.sendJSON(w, http.StatusOK, models.APIResponse{
+		Success: true,
+		Data:    h.system.Snapshot(),
 	})
 }
 

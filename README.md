@@ -18,7 +18,7 @@ Each machine runs one `llm_server_manager` instance that can start and stop mode
 - **Empty is fine** — the server starts with no models configured (with a warning), so you can add them later via reload or the UI
 - **Coordinator / fleet** — one instance can list, start, and stop models on remote instances ("workers") running the same binary
 - **OpenAI-compatible proxy** — optional `/v1/models`, `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, routed to the machine running the model; toggle it live from the UI or config
-- **Web UI** — view and control a fleet from the browser; edit configs with syntax highlighting and concurrent-edit protection
+- **Web UI** — view and control a fleet from the browser; per-machine CPU/GPU/memory metrics; edit configs with syntax highlighting and concurrent-edit protection; responsive/mobile-friendly
 - **CLI** — `llm-cli` for scripting and remote control
 - **Security** — optional API-key auth, CORS allow-list, per-IP rate limiting, request size caps
 - **Daemon mode**, **graceful shutdown**, **optional llama-server logging**
@@ -27,6 +27,7 @@ Each machine runs one `llm_server_manager` instance that can start and stop mode
 
 - Go 1.21+
 - `llama.cpp`'s `llama-server` available either next to the `llm_server_manager` binary or on `PATH` (override with `LLAMA_SERVER_PATH`)
+- Node.js 18+ and npm (only when building the web UI / release binaries)
 
 ## Build
 
@@ -41,7 +42,18 @@ make build-ui              # make ui + go build -tags embedui
 
 # CLI
 make build-cli             # cd tools/cli && go build -o llm-cli
+
+# All release binaries into dist/ (gitignored; builds the current UI first)
+make dist
 ```
+
+`make dist` produces:
+
+- `dist/llm_server_manager-{darwin,linux}-{amd64,arm64}`
+- `dist/llm_server_manager-ui-darwin-arm64` (embedded web UI)
+- `dist/llm-cli-{darwin,linux}-{amd64,arm64}`
+
+The binaries under `dist/` are build artifacts and are not committed.
 
 ## Quick start
 
@@ -133,7 +145,7 @@ Validation (on start and on `PUT /api/v1/config`): `name` required, `model_path`
 
 ### Workers (coordinator mode)
 
-A non-empty `workers` list enables coordinator mode. Each entry is either a plain URL or an object with `url`, optional `name` (defaults to the URL host), and optional `api_key` (sent as the worker's `api-key` header). Workers run this same binary, unchanged.
+A non-empty `workers` list enables coordinator mode. Each entry is either a plain URL or an object with `url`, optional `name` (defaults to the URL host), and optional `api_key` (sent as the worker's `api-key` header). Workers run this same binary; per-worker system metrics require a worker built from this version or newer (older workers still support model control). Worker names should be unique, and `local` is reserved for the coordinator itself (such an entry is skipped with a warning); duplicate names are ambiguous in fleet views and routing.
 
 ### Proxy
 
@@ -147,7 +159,10 @@ The config file's **directory** is watched (so editors that save by rename work)
 
 Build with `make build-ui` and start with `-ui` to serve the SPA at `/ui/`.
 
-- **Fleet view** — one card per machine (local + workers) with per-machine status, the running model, and inline start/stop. Workers are ordered as configured.
+- **Fleet view** — one card per manager, with a row per fleet machine (local + workers) showing status, the running model, inline start/stop, and its own metrics. Workers are ordered as configured.
+- **Live system metrics** — every fleet row carries its own CPU, GPU and memory history, refreshed on the same interval as the fleet. Local stats come from the manager directly; worker stats are proxied by the coordinator. Each metric is a task-manager-style bar chart; GPU telemetry is shown when `nvidia-smi`, `rocm-smi` or the macOS IORegistry is available.
+- **Mobile-friendly** — responsive fleet rows and metrics; the header condenses on narrow phones, the model list becomes stacked rows, and form controls use 16px text to avoid iOS focus zoom. Tested at 320px through desktop widths with no horizontal page overflow.
+- **Background-friendly polling** — telemetry and fleet polling run only while the Fleet view is open and the tab is visible. A hidden tab pauses polling and refreshes when you return; the Machine view polls only its own status, and Config views do not pull metrics.
 - **First run** — the page auto-adds the manager that served it as "This machine". Add more machines (URL + optional API key) in **⚙ Settings**; they're stored in the browser's `localStorage`.
 - **Machine view** — the full model list for a machine, plus an **Edit config** action and a **Proxy** switch.
 - **Config editor** — syntax-highlighted raw JSON. The server returns an `ETag`; the editor polls for external changes and refuses to overwrite them (see below).
@@ -180,15 +195,17 @@ and, when `LLM_MANAGER_API_KEY` is set, require the `api-key` header.
 | `GET /api/v1/models` | List configured models (sorted by name), with an `active` flag |
 | `POST /api/v1/models/{model}/start` | Start a model |
 | `DELETE /api/v1/models/{model}/stop` | Stop a model |
-| `GET /api/v1/models/running` | Get the running model (or `success:false`, "no model is operating") |
+| `GET /api/v1/models/running` | Get the running model, including its `RunningServer` details in `data` (or `success:false`, "no model is operating") |
 | `GET /api/v1/config` | Raw config file text, plus an `ETag` header (supports `If-None-Match` → 304) |
 | `PUT /api/v1/config` | Validate and atomically write a new config (raw JSON body); reloads immediately. Optional `If-Match` → `409` on a stale validator |
 | `GET /api/v1/workers` | Worker list with health (empty when standalone) |
 | `GET /api/v1/fleet` | Aggregated view: local machine first, then workers |
 | `GET /api/v1/workers/{worker}/models` | A worker's model list |
+| `GET /api/v1/workers/{worker}/system` | A worker's host telemetry, proxied through the coordinator |
 | `POST /api/v1/workers/{worker}/models/{model}/start` | Start a model on a worker |
 | `DELETE /api/v1/workers/{worker}/models/{model}/stop` | Stop a model on a worker |
 | `GET /api/v1/proxy` | Runtime proxy state: `{"enabled": bool}` |
+| `GET /api/v1/system` | Host telemetry for the UI: CPU, memory, GPU (GPU is best-effort) |
 | `GET /v1/models` | OpenAI-format model list (proxy mode only) |
 | `POST /v1/chat/completions`, `POST /v1/completions`, `POST /v1/embeddings` | Proxied to the machine running the model (streaming supported) |
 
@@ -207,6 +224,9 @@ curl -X PUT http://localhost:8080/api/v1/config -H "If-Match: $etag" --data-bina
 
 # Check the proxy state
 curl http://localhost:8080/api/v1/proxy
+
+# Host resource usage (CPU / memory / GPU)
+curl http://localhost:8080/api/v1/system
 
 # With authentication
 curl -H "api-key: $LLM_MANAGER_API_KEY" http://localhost:8080/api/v1/models
@@ -267,8 +287,9 @@ main.go            entry point / flags
 config/            JSON config loading (viper)
 models/            data structures
 manager/           llama.cpp process lifecycle
-handlers/          REST handlers (models, config, workers, fleet, proxy status)
+handlers/          REST handlers (models, config, workers, fleet, proxy status, system telemetry)
 fleet/             coordinator: worker registry + client, fleet aggregation
+metrics/           host CPU/memory/GPU telemetry sampler (request-driven)
 proxy/             OpenAI-compatible /v1 proxy
 server/            HTTP server, routing, middleware, config watcher, /ui/ embedding
 webui/             Svelte 5 + Vite + TypeScript web UI
@@ -281,7 +302,8 @@ docs/              design notes
 - **Server won't start** — check `llama-server` exists (next to the binary or via `LLAMA_SERVER_PATH`), the model file paths are readable, and the port is free.
 - **Config changes not picked up** — confirm you edited the file passed to `-config`; the config must live on a local filesystem (fsnotify does not work on NFS/SMB/FUSE). A malformed config is rejected and the previous one stays active (check for `Failed to reload config`).
 - **UI shows "No machines yet"** — the UI starts with an empty machine list and normally auto-adds the manager that served it. If it didn't (e.g. the UI is hosted separately), add the manager in **⚙ Settings**.
-- **Worker doesn't appear in the UI** — the coordinator must list it under `workers`; check `GET /api/v1/fleet` and `GET /api/v1/workers` (offline workers show a reason such as *"Connection refused — the manager isn't running"*).
+- **Worker doesn't appear in the UI** — the coordinator must list it under `workers`; check `GET /api/v1/fleet` and `GET /api/v1/workers` (offline workers show a reason such as *"Connection refused — the manager isn't running"*). Give workers unique names; `local` is reserved for the coordinator and duplicate names make routing ambiguous.
+- **Worker metrics say "update the manager"** — the worker must run this version or newer. Its `GET /api/v1/system` endpoint is proxied through `GET /api/v1/workers/{worker}/system`; older workers answer 404.
 - **`/v1/...` returns 404** — the proxy is off. Enable `"proxy": true` (or use the UI switch); it applies live.
 - **401 from the API/CLI** — `LLM_MANAGER_API_KEY` is set; send the same key in the `api-key` header (the CLI reads it from the environment).
 

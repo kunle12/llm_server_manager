@@ -1,4 +1,4 @@
-import type { APIResponse, FleetMachine, Machine, ModelItem, RunningServer } from './types'
+import type { APIResponse, FleetMachine, Machine, ModelItem, RunningServer, SystemSnapshot } from './types'
 
 export class ApiError extends Error {
   status: number
@@ -83,6 +83,20 @@ export async function getProxy(m: Machine): Promise<boolean | null> {
   const body = await request(m, '/api/v1/proxy')
   const data = body.data as { enabled?: boolean } | undefined
   return typeof data?.enabled === 'boolean' ? data.enabled : null
+}
+
+/** GET /api/v1/system — host CPU, memory and GPU usage. */
+export async function getSystem(m: Machine): Promise<SystemSnapshot> {
+  const body = await request(m, '/api/v1/system')
+  if (!body.success || !body.data) throw new ApiError(body.message ?? 'system stats unavailable', 200)
+  return body.data as SystemSnapshot
+}
+
+/** GET /api/v1/workers/{worker}/system — a worker's host usage via the coordinator. */
+export async function getWorkerSystem(m: Machine, worker: string): Promise<SystemSnapshot> {
+  const body = await request(m, `/api/v1/workers/${encodeURIComponent(worker)}/system`)
+  if (!body.success || !body.data) throw new ApiError(body.message ?? 'system stats unavailable', 200)
+  return body.data as SystemSnapshot
 }
 
 /** POST /api/v1/workers/{worker}/models/{name}/start */

@@ -1,6 +1,13 @@
 import { get, writable } from 'svelte/store'
-import { ApiError, getFleet, getProxy, getRunning } from './api'
-import type { FleetMachine, Machine, MachineStatus, Settings } from './types'
+import { ApiError, getFleet, getProxy, getRunning, getSystem, getWorkerSystem } from './api'
+import type {
+  FleetMachine,
+  Machine,
+  MachineStatus,
+  Settings,
+  SystemPoint,
+  SystemSnapshot,
+} from './types'
 
 const MACHINES_KEY = 'llm-fleet.machines.v1'
 const SETTINGS_KEY = 'llm-fleet.settings.v1'
@@ -24,13 +31,22 @@ function loadSettings(): Settings {
   }
 }
 
+/** localStorage writes can throw in Safari private mode or when storage is full. */
+function persist(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    // Storage unavailable/quota exceeded: keep the in-memory state working.
+  }
+}
+
 /** Fleet registry, persisted to localStorage. */
 export const machines = writable<Machine[]>(loadMachines())
-machines.subscribe((v) => localStorage.setItem(MACHINES_KEY, JSON.stringify(v)))
+machines.subscribe((v) => persist(MACHINES_KEY, v))
 
 /** Poll interval / pause / theme, persisted to localStorage. */
 export const settings = writable<Settings>(loadSettings())
-settings.subscribe((v) => localStorage.setItem(SETTINGS_KEY, JSON.stringify(v)))
+settings.subscribe((v) => persist(SETTINGS_KEY, v))
 
 /** Latest known status per machine id. */
 export const statuses = writable<Record<string, MachineStatus>>({})
@@ -48,13 +64,126 @@ export const fleetViews = writable<Record<string, FleetMachine[] | null>>({})
  */
 export const proxies = writable<Record<string, boolean | undefined>>({})
 
-/** Refresh one machine's proxy state. Never throws. */
+/**
+ * Latest host telemetry keyed by `systemKey(machineId, entryName)`. `null` =
+ * the machine answered but does not support GET /api/v1/system (older binary)
+ * or could not be reached; `undefined` = not sampled yet.
+ */
+export const systemStats = writable<Record<string, SystemSnapshot | null>>({})
+export const systemErrors = writable<Record<string, string | undefined>>({})
+
+/**
+ * Client-side history for the live charts, one sample per poll, keyed like
+ * systemStats. Each fleet entry (local + every worker) has its own series.
+ */
+export const systemHistory = writable<Record<string, SystemPoint[]>>({})
+
+/** Enough samples for ~4 minutes at the default 5s interval. */
+export const MAX_SYSTEM_POINTS = 48
+
+/** Key for one fleet entry's telemetry ("local" or a worker name). */
+export function systemKey(machineId: string, entry: string): string {
+  return `${machineId}::${entry}`
+}
+
+/** One in-flight system request per entry, so slow polls cannot overlap. */
+const systemInFlight = new Set<string>()
+
+/** True only while the Fleet view is mounted: system stats are not sampled elsewhere. */
+let telemetryViews = 0
+let telemetryActive = false
+
+/** Set by the Fleet view. Turning it off stops new telemetry samples immediately. */
+export function setTelemetryActive(active: boolean): void {
+  telemetryViews = Math.max(0, telemetryViews + (active ? 1 : -1))
+  telemetryActive = telemetryViews > 0
+}
+
+/** True only while the Fleet view is the active route. */
+let pollingActive = false
+
+/** Set by the app router so background pages do not poll the fleet. */
+export function setPollingActive(active: boolean): void {
+  if (pollingActive === active) return
+  pollingActive = active
+  restartPolling()
+}
+
+/**
+ * Refresh one fleet entry's host telemetry. Local entries are read from the
+ * manager itself; workers are proxied through the coordinator so their API
+ * keys never reach the browser. Never throws.
+ */
+export async function refreshSystem(m: Machine, entry = 'local'): Promise<void> {
+  const key = systemKey(m.id, entry)
+  if (systemInFlight.has(key)) return
+  systemInFlight.add(key)
+  try {
+    const snap = entry === 'local' ? await getSystem(m) : await getWorkerSystem(m, entry)
+    systemStats.update((s) => ({ ...s, [key]: snap }))
+    systemErrors.update((s) => ({ ...s, [key]: undefined }))
+
+    const point: SystemPoint = {
+      cpu: snap.cpu.usage_percent,
+      mem: snap.memory.usage_percent,
+      gpu: snap.gpu?.available ? snap.gpu.usage_percent : null,
+    }
+    systemHistory.update((s) => {
+      const next = [...(s[key] ?? []), point]
+      return { ...s, [key]: next.slice(-MAX_SYSTEM_POINTS) }
+    })
+  } catch (e) {
+    systemStats.update((s) => ({ ...s, [key]: null }))
+    systemErrors.update((s) => ({
+      ...s,
+      [key]: e instanceof Error ? e.message : String(e),
+    }))
+  } finally {
+    systemInFlight.delete(key)
+  }
+}
+
+/** Sample every online entry; stats arrive independently of the fleet view. */
+function refreshEntryStats(m: Machine, entries: FleetMachine[]): void {
+  if (!telemetryActive) return
+  for (const entry of entries) {
+    if (entry.status === 'online') void refreshSystem(m, entry.machine)
+  }
+}
+
+/** Refresh one manager's proxy state. Never throws. */
 export async function refreshProxy(m: Machine): Promise<void> {
   try {
     const enabled = await getProxy(m)
     proxies.update((s) => ({ ...s, [m.id]: enabled ?? undefined }))
   } catch {
     proxies.update((s) => ({ ...s, [m.id]: undefined }))
+  }
+}
+
+/**
+ * Refresh only this manager's own running-model status. The Machine view uses
+ * this instead of refreshMachine so opening a coordinator does not fan out to
+ * every worker and collect fleet telemetry.
+ */
+export async function refreshMachineStatus(m: Machine): Promise<void> {
+  try {
+    const running = await getRunning(m)
+    statuses.update((s) => ({
+      ...s,
+      [m.id]: running
+        ? {
+            state: 'running',
+            model: running.model_config.alias || running.model_config.name,
+            startTime: running.start_time,
+          }
+        : { state: 'idle' },
+    }))
+  } catch (e) {
+    statuses.update((s) => ({
+      ...s,
+      [m.id]: { state: 'offline', error: e instanceof Error ? e.message : String(e) },
+    }))
   }
 }
 
@@ -74,6 +203,7 @@ export async function refreshMachine(m: Machine): Promise<void> {
         ? { state: 'running', model: local.running.alias || local.running.name, startTime: local.running.start_time }
         : { state: 'idle' },
     }))
+    refreshEntryStats(m, entries)
     return
   } catch (e) {
     fleetViews.update((s) => ({ ...s, [m.id]: null }))
@@ -98,6 +228,7 @@ export async function refreshMachine(m: Machine): Promise<void> {
         ? { state: 'running', model: running.model_config.alias || running.model_config.name, startTime: running.start_time }
         : { state: 'idle' },
     }))
+    if (telemetryActive) void refreshSystem(m, 'local')
   } catch (e) {
     statuses.update((s) => ({
       ...s,
@@ -106,15 +237,24 @@ export async function refreshMachine(m: Machine): Promise<void> {
   }
 }
 
+/** Prevent a slow poll from overlapping the next interval tick. */
+let refreshInFlight = false
+
 /** Refresh every machine concurrently. */
 export async function refreshAll(): Promise<void> {
-  await Promise.allSettled(
-    get(machines).flatMap((m) => [refreshMachine(m), refreshProxy(m)]),
-  )
+  if (refreshInFlight) return
+  refreshInFlight = true
+  try {
+    await Promise.allSettled(
+      get(machines).flatMap((m) => [refreshMachine(m), refreshProxy(m)]),
+    )
+  } finally {
+    refreshInFlight = false
+  }
 }
 
 /** Machine id; crypto.randomUUID needs a secure context (localhost/https). */
-function machineId(): string {
+export function newMachineId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
   }
@@ -141,7 +281,7 @@ export async function bootstrapLocalMachine(): Promise<void> {
     const body: unknown = await res.json().catch(() => null)
     if (!body || typeof body !== 'object' || !('success' in (body as object))) return
     if (get(machines).length > 0) return // the user added one meanwhile
-    machines.set([{ id: machineId(), name: 'This machine', url: origin, apiKey: '' }])
+    machines.set([{ id: newMachineId(), name: 'This machine', url: origin, apiKey: '' }])
   } catch {
     // Network error, timeout, or non-JSON body: not a manager, stay manual.
   } finally {
@@ -151,13 +291,38 @@ export async function bootstrapLocalMachine(): Promise<void> {
 
 let timer: ReturnType<typeof setInterval> | undefined
 
+/** Auto-refresh runs only on the Fleet view, when visible and not paused. */
+function shouldPoll(): boolean {
+  if (!pollingActive) return false
+  if (get(settings).paused) return false
+  if (get(machines).length === 0) return false
+  return typeof document === 'undefined' || !document.hidden
+}
+
 function restartPolling(): void {
   if (timer) clearInterval(timer)
   timer = undefined
-  const s = get(settings)
-  if (!s.paused && get(machines).length > 0) {
-    timer = setInterval(refreshAll, s.pollMs)
+  if (shouldPoll()) {
+    timer = setInterval(refreshAll, get(settings).pollMs)
   }
+}
+
+// A hidden tab stops polling. When it comes back, refresh once and resume.
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    restartPolling()
+    if (shouldPoll()) void refreshAll()
+  })
+}
+
+// Safari/Firefox may restore a page from the back/forward cache without a
+// visibilitychange event. Treat a persisted pageshow like becoming visible.
+if (typeof window !== 'undefined') {
+  window.addEventListener('pageshow', (event) => {
+    if (!event.persisted) return
+    restartPolling()
+    if (shouldPoll()) void refreshAll()
+  })
 }
 
 settings.subscribe(restartPolling)

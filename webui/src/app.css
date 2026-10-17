@@ -34,6 +34,11 @@
   --err: #ff3b30;
   --err-soft: rgba(255, 59, 48, 0.1);
 
+  /* Resource charts */
+  --chart-cpu: #0071e3;
+  --chart-gpu: #af52de;
+  --chart-mem: #00a878;
+
   /* Code highlighting */
   --code-key: #0550ae;
   --code-str: #1a7f37;
@@ -82,6 +87,11 @@
   --warn: #ffd60a;
   --err: #ff453a;
   --err-soft: rgba(255, 69, 58, 0.16);
+
+  /* Resource charts */
+  --chart-cpu: #0a84ff;
+  --chart-gpu: #bf5af2;
+  --chart-mem: #32d4a4;
 
   /* Code highlighting */
   --code-key: #79c0ff;
@@ -272,13 +282,6 @@ main {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-1);
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 1rem;
-  align-items: start;
 }
 
 .machine {
@@ -1127,5 +1130,117 @@ textarea.code {
 
   .poll-label span {
     display: none;
+  }
+
+  /* Page header actions (machine view) need to wrap under the title. */
+  .page-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .page-head .actions {
+    margin-left: 0;
+    flex-wrap: wrap;
+  }
+
+  /* Stack model rows on phones instead of clipping the actions column. */
+  .list-card table,
+  .list-card thead,
+  .list-card tbody,
+  .list-card tr,
+  .list-card td {
+    display: block;
+    width: 100%;
+  }
+
+  .list-card thead {
+    display: none;
+  }
+
+  .list-card tbody tr {
+    padding: 0.8rem 0.9rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .list-card tbody tr:last-child {
+    border-bottom: none;
+  }
+
+  .list-card tbody tr:hover td {
+    background: transparent;
+  }
+
+  .list-card td {
+    border: none;
+    padding: 0.1rem 0;
+  }
+
+  .list-card td.path {
+    max-width: none;
+    margin-top: 0.2rem;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    word-break: break-word;
+  }
+
+  .list-card td.path::before {
+    content: 'Path: ';
+    color: var(--faint);
+  }
+
+  .list-card td:nth-child(3) {
+    margin-top: 0.2rem;
+    color: var(--muted);
+  }
+
+  .list-card td.port:empty {
+    display: none;
+  }
+
+  .list-card td:nth-child(3)::before {
+    content: 'Port: ';
+    color: var(--faint);
+  }
+
+  .list-card td.actions {
+    margin-top: 0.55rem;
+    text-align: left;
+    white-space: normal;
+  }
+
+  /* 16px keeps iOS Safari from zooming the viewport on focus. */
+  input,
+  select,
+  textarea,
+  .code-editor pre,
+  .code-editor textarea {
+    font-size: 16px;
+  }
+
+  /* Slightly larger touch targets on phones. */
+  .btn {
+    min-height: 40px;
+  }
+
+  .switch.compact {
+    padding: 0.35rem 0.15rem;
+  }
+}
+
+/* Narrow phones: keep the header controls usable instead of clipping them. */
+@media (max-width: 480px) {
+  header {
+    padding: 0 0.65rem;
+  }
+
+  .brand > span:last-child {
+    display: none;
+  }
+
+  .icon-btn {
+    width: 38px;
+    height: 38px;
   }
 }

@@ -83,3 +83,44 @@ export interface FleetMachine {
   models: ModelItem[]
   error?: string
 }
+
+/** Host resource telemetry from GET /api/v1/system. */
+export interface SystemCPU {
+  usage_percent: number
+  cores: number
+  model?: string
+}
+
+export interface SystemMemory {
+  used_bytes: number
+  total_bytes: number
+  usage_percent: number
+}
+
+export interface SystemGPU {
+  available: boolean
+  usage_percent: number
+  memory_used_bytes: number
+  memory_total_bytes: number
+  name?: string
+  count?: number
+  core_count?: number
+  source?: string
+}
+
+export interface SystemSnapshot {
+  cpu: SystemCPU
+  memory: SystemMemory
+  gpu: SystemGPU
+  load?: number[]
+  hostname?: string
+  platform?: string
+  timestamp: string
+}
+
+/** One sample kept client-side for the history charts. */
+export interface SystemPoint {
+  cpu: number
+  mem: number
+  gpu: number | null
+}
