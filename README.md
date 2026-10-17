@@ -160,7 +160,7 @@ The config file's **directory** is watched (so editors that save by rename work)
 Build with `make build-ui` and start with `-ui` to serve the SPA at `/ui/`.
 
 - **Fleet view** — one card per manager, with a row per fleet machine (local + workers) showing status, the running model, inline start/stop, and its own metrics. Workers are ordered as configured.
-- **Live system metrics** — every fleet row carries its own CPU, GPU and memory history, refreshed on the same interval as the fleet. Local stats come from the manager directly; worker stats are proxied by the coordinator. Each metric is a task-manager-style bar chart; GPU telemetry is shown when `nvidia-smi`, `rocm-smi` or the macOS IORegistry is available.
+- **Live system metrics** — every fleet row carries its own CPU, GPU and memory history, refreshed on the same interval as the fleet. Local stats come from the manager directly; worker stats are proxied by the coordinator. Each metric is a task-manager-style bar chart. On Linux, NVIDIA GPUs are detected through `nvidia-smi`; multi-GPU hosts show the maximum utilization, summed VRAM and a `×N` count. Devices that report `N/A` memory (for example NVIDIA GB10 unified memory) still show utilization with memory marked `n/a`. AMD uses `rocm-smi`, and macOS uses the IORegistry.
 - **Mobile-friendly** — responsive fleet rows and metrics; the header condenses on narrow phones, the model list becomes stacked rows, and form controls use 16px text to avoid iOS focus zoom. Tested at 320px through desktop widths with no horizontal page overflow.
 - **Background-friendly polling** — telemetry and fleet polling run only while the Fleet view is open and the tab is visible. A hidden tab pauses polling and refreshes when you return; the Machine view polls only its own status, and Config views do not pull metrics.
 - **First run** — the page auto-adds the manager that served it as "This machine". Add more machines (URL + optional API key) in **⚙ Settings**; they're stored in the browser's `localStorage`.
@@ -305,6 +305,7 @@ docs/              design notes
 - **Worker doesn't appear in the UI** — the coordinator must list it under `workers`; check `GET /api/v1/fleet` and `GET /api/v1/workers` (offline workers show a reason such as *"Connection refused — the manager isn't running"*). Give workers unique names; `local` is reserved for the coordinator and duplicate names make routing ambiguous.
 - **Worker metrics say "update the manager"** — the worker must run this version or newer. Its `GET /api/v1/system` endpoint is proxied through `GET /api/v1/workers/{worker}/system`; older workers answer 404.
 - **`/v1/...` returns 404** — the proxy is off. Enable `"proxy": true` (or use the UI switch); it applies live.
+- **GPU shows “No GPU telemetry” on Linux** — the manager looks for `nvidia-smi` on `PATH` and in `/usr/bin`, `/usr/local/bin`, `/usr/local/nvidia/bin`, and `/usr/lib/wsl/lib`. Confirm it runs as the same user as the service (`nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits`). Unified-memory devices such as GB10 report `N/A` for memory; utilization still works. AMD uses `rocm-smi`; Intel iGPUs are not covered.
 - **401 from the API/CLI** — `LLM_MANAGER_API_KEY` is set; send the same key in the `api-key` header (the CLI reads it from the environment).
 
 ## License

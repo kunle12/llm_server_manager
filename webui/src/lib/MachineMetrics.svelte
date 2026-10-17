@@ -47,9 +47,13 @@
       parts.push(`${formatBytes(gpu.memory_used_bytes)} in use`)
     }
     if (gpu.name) {
-      parts.push(gpu.core_count ? `${gpu.name} · ${gpu.core_count}-core GPU` : gpu.name)
+      const label = gpu.core_count ? `${gpu.name} · ${gpu.core_count}-core GPU` : gpu.name
+      parts.push((gpu.count ?? 1) > 1 ? `${label} ×${gpu.count}` : label)
     } else if ((gpu.count ?? 0) > 1) {
       parts.push(`${gpu.count} GPUs`)
+    }
+    if (gpu.memory_total_bytes === 0 && gpu.memory_used_bytes === 0) {
+      parts.push('memory n/a')
     }
     return parts.join(' · ') || 'GPU telemetry'
   })

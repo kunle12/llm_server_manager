@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"encoding/json"
+	"os/exec"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -34,9 +35,33 @@ func runOutput(name string, args ...string) (string, error) {
 
 // ---------------------------------------------------------------- NVIDIA
 
+// nvidiaSMI is installed with the NVIDIA driver and normally lives on PATH.
+// A daemon/service may start with a restricted PATH, so fall back to the
+// standard driver locations used on Linux and in WSL containers.
+var nvidiaSMIPaths = []string{
+	"nvidia-smi",
+	"/usr/bin/nvidia-smi",
+	"/usr/local/bin/nvidia-smi",
+	"/usr/local/nvidia/bin/nvidia-smi",
+	"/usr/lib/wsl/lib/nvidia-smi",
+}
+
+func findNvidiaSMI() (string, bool) {
+	for _, candidate := range nvidiaSMIPaths {
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path, true
+		}
+	}
+	return "", false
+}
+
 func gpuFromNVIDIA() (GPUStats, bool) {
+	bin, ok := findNvidiaSMI()
+	if !ok {
+		return GPUStats{}, false
+	}
 	out, err := runOutput(
-		"nvidia-smi",
+		bin,
 		"--query-gpu=name,utilization.gpu,memory.used,memory.total",
 		"--format=csv,noheader,nounits",
 	)
@@ -47,37 +72,57 @@ func gpuFromNVIDIA() (GPUStats, bool) {
 }
 
 // parseNVIDIA reads `name, utilization.gpu, memory.used, memory.total` rows
-// (MiB for memory). Rows with unavailable values are skipped.
+// (MiB for memory). Some devices expose a row but report N/A for unified
+// memory (for example NVIDIA GB10); those rows are still a valid GPU, so
+// memory fields are optional as long as utilization is readable.
 func parseNVIDIA(out string) (GPUStats, bool) {
 	gpu := GPUStats{Available: true, Source: "nvidia-smi"}
 	rows := 0
 	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Split(line, ",")
-		if len(fields) < 4 {
+		if len(fields) < 2 {
 			continue
 		}
-		usage, err := strconv.ParseFloat(strings.TrimSpace(fields[1]), 64)
-		if err != nil {
+		name := strings.TrimSpace(fields[0])
+		if name == "" {
 			continue
 		}
-		used, ok := parseMiB(fields[2])
-		if !ok {
-			continue
+
+		usageOK := false
+		usage := 0.0
+		if value, err := strconv.ParseFloat(strings.TrimSpace(fields[1]), 64); err == nil {
+			usage = value
+			usageOK = true
 		}
-		total, ok := parseMiB(fields[3])
-		if !ok {
+
+		used, usedOK := uint64(0), false
+		if len(fields) > 2 {
+			used, usedOK = parseMiB(fields[2])
+		}
+		total, totalOK := uint64(0), false
+		if len(fields) > 3 {
+			total, totalOK = parseMiB(fields[3])
+		}
+		// A row with no readable telemetry at all is not useful.
+		if !usageOK && !usedOK && !totalOK {
 			continue
 		}
 
 		if rows == 0 {
-			gpu.Name = strings.TrimSpace(fields[0])
+			gpu.Name = name
 		}
 		rows++
-		if u := clampPercent(usage); u > gpu.UsagePercent {
-			gpu.UsagePercent = round1(u)
+		if usageOK {
+			if u := clampPercent(usage); u > gpu.UsagePercent {
+				gpu.UsagePercent = round1(u)
+			}
 		}
-		gpu.MemoryUsedBytes += used
-		gpu.MemoryTotalBytes += total
+		if usedOK {
+			gpu.MemoryUsedBytes += used
+		}
+		if totalOK {
+			gpu.MemoryTotalBytes += total
+		}
 	}
 	if rows == 0 {
 		return GPUStats{}, false

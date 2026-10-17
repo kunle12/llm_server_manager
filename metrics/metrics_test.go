@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 )
@@ -28,6 +30,20 @@ NVIDIA GeForce RTX 4090, 70, 4096, 24576
 	}
 	if gpu.Source != "nvidia-smi" {
 		t.Errorf("source = %q", gpu.Source)
+	}
+}
+
+func TestParseNVIDIANVIDIAGB10UnifiedMemory(t *testing.T) {
+	out := "NVIDIA GB10, 0, [N/A], [N/A]\n"
+	gpu, ok := parseNVIDIA(out)
+	if !ok {
+		t.Fatal("parseNVIDIA should detect a GPU whose memory is N/A")
+	}
+	if gpu.Name != "NVIDIA GB10" || gpu.Count != 1 || gpu.UsagePercent != 0 {
+		t.Fatalf("gpu = %+v", gpu)
+	}
+	if gpu.MemoryUsedBytes != 0 || gpu.MemoryTotalBytes != 0 {
+		t.Fatalf("memory = %d/%d, want 0/0", gpu.MemoryUsedBytes, gpu.MemoryTotalBytes)
 	}
 }
 
@@ -117,4 +133,28 @@ func TestCollectorConcurrentSnapshots(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestGPUFromNVIDIAWithFakeTool(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "nvidia-smi")
+	body := "#!/bin/sh\nprintf 'NVIDIA GeForce RTX 4090, 25, 2048, 24576\\n'\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	gpu, ok := gpuFromNVIDIA()
+	if !ok {
+		t.Fatal("gpuFromNVIDIA did not detect the fake nvidia-smi")
+	}
+	if gpu.Name != "NVIDIA GeForce RTX 4090" || gpu.UsagePercent != 25 || gpu.Count != 1 {
+		t.Fatalf("gpu = %+v", gpu)
+	}
+	if gpu.MemoryUsedBytes != 2048*1024*1024 || gpu.MemoryTotalBytes != 24576*1024*1024 {
+		t.Fatalf("memory = %d/%d", gpu.MemoryUsedBytes, gpu.MemoryTotalBytes)
+	}
+	if gpu.Source != "nvidia-smi" {
+		t.Fatalf("source = %q", gpu.Source)
+	}
 }
