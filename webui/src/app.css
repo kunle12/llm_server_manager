@@ -828,6 +828,18 @@ textarea.code {
   color: var(--text);
 }
 
+/* The global `code` rule (0.85em font, panel background, padding) must not
+   leak into the highlight layer. Any metric that differs from the textarea —
+   font-size, line-height, padding — makes the painted glyphs drift away from
+   the caret, so text typed mid-line appears displaced or not at all. */
+.code-editor pre code {
+  font: inherit;
+  line-height: inherit;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+}
+
 .code-editor textarea {
   position: relative;
   display: block;
