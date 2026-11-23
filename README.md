@@ -159,6 +159,7 @@ The config file's **directory** is watched (so editors that save by rename work)
 
 Build with `make build-ui` and start with `-ui` to serve the SPA at `/ui/`.
 
+- **Console theme** — a light/dark LCARS-inspired console: warm paper frame, pastel command blocks, compressed display type and an instrument-style readout. The decorative bottom command bar appears on wide screens and collapses on tablets/phones so the screen fills the phone.
 - **Fleet view** — one card per manager, with a row per fleet machine (local + workers) showing status, the running model, inline start/stop, and its own metrics. Workers are ordered as configured.
 - **Live system metrics** — every fleet row carries its own CPU, GPU and memory history, refreshed on the same interval as the fleet. Local stats come from the manager directly; worker stats are proxied by the coordinator. Each metric is a task-manager-style bar chart. On Linux, NVIDIA GPUs are detected through `nvidia-smi`; multi-GPU hosts show the maximum utilization, summed VRAM and a `×N` count. Devices that report `N/A` memory (for example NVIDIA GB10 unified memory) still show utilization with memory marked `n/a`. AMD uses `rocm-smi`, and macOS uses the IORegistry.
 - **Mobile-friendly** — responsive fleet rows and metrics; the header condenses on narrow phones, the model list becomes stacked rows, and form controls use 16px text to avoid iOS focus zoom. Tested at 320px through desktop widths with no horizontal page overflow.

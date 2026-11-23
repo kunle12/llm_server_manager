@@ -2,7 +2,9 @@
 
 **Goal:** one simple, portable app to view and control `llm_server_manager` instances running on multiple machines.
 
-**Status:** implemented. The UI shipped and was later redesigned (Apple-inspired); it also gained syntax-highlighted config editing with `ETag`/`If-Match` conflict handling, a per-machine proxy switch, and per-machine host telemetry (CPU / GPU / memory) on the fleet page. See `README.md` (Web UI) and `AGENTS.md` (Web UI section) for the current behaviour; this document describes the original proposal.
+**Status:** implemented. The UI shipped and was later restyled as an LCARS-inspired console (warm paper frame, colour-block commands, compressed display type); it also gained syntax-highlighted config editing with `ETag`/`If-Match` conflict handling, a per-machine proxy switch, and per-machine host telemetry (CPU / GPU / memory) on the fleet page. See `README.md` (Web UI) and `AGENTS.md` (Web UI section) for the current behaviour; this document describes the original proposal.
+
+**Implemented deviation (2026-11-24):** the current UI uses the LCARS console theme and self-hosted Saira / IBM Plex Mono typefaces rather than the dark-only, system-font proposal below. The original proposal is retained as historic design context.
 
 ---
 

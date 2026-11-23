@@ -41,45 +41,64 @@
 
 <style>
   .metric {
+    position: relative;
     min-width: 0;
-    padding: 0.8rem 0.85rem 0.7rem;
+    padding: 0.75rem 0.8rem 0.65rem 1rem;
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--panel-2);
+    border-radius: 0 12px 12px 0;
+    background: rgba(255, 255, 255, 0.34);
+    overflow: hidden;
+  }
+
+  :global(:root[data-theme='dark']) .metric {
+    background: rgba(255, 255, 255, 0.025);
+  }
+
+  .metric::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 5px;
+    background: var(--metric-color);
   }
 
   .metric-top {
     display: flex;
-    align-items: center;
+    align-items: baseline;
     gap: 0.38rem;
   }
 
   .metric-icon {
     display: grid;
     place-items: center;
+    align-self: center;
     color: var(--metric-color);
   }
 
   .metric-label {
-    font-size: 0.72rem;
-    font-weight: 650;
-    letter-spacing: 0.04em;
+    font-family: var(--mono);
+    font-size: 7.5px;
+    font-weight: 500;
+    letter-spacing: 0.18em;
     text-transform: uppercase;
     color: var(--muted);
   }
 
   .metric-value {
     margin-left: auto;
-    font-size: 1.22rem;
-    font-weight: 650;
-    letter-spacing: -0.03em;
+    font-family: var(--mono);
+    font-size: 1.12rem;
+    font-weight: 500;
+    letter-spacing: -0.02em;
     font-variant-numeric: tabular-nums;
     color: var(--text);
     line-height: 1.1;
   }
 
   .metric-value.unavailable {
-    color: var(--faint);
+    color: var(--dim);
   }
 
   .metric-blank {
@@ -88,18 +107,22 @@
     height: 72px;
     margin-top: 0.6rem;
     border: 1px dashed var(--border-strong);
-    border-radius: 6px;
-    font-size: 0.74rem;
-    color: var(--faint);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 7.5px;
+    letter-spacing: 0.08em;
+    color: var(--dim);
     text-align: center;
     padding: 0 0.4rem;
   }
 
   .metric-detail {
     margin: 0.5rem 0 0;
-    font-size: 0.74rem;
-    line-height: 1.35;
-    color: var(--faint);
+    font-family: var(--mono);
+    font-size: 7.5px;
+    line-height: 1.45;
+    letter-spacing: 0.02em;
+    color: var(--dim);
     display: -webkit-box;
     -webkit-line-clamp: 2;
     line-clamp: 2;

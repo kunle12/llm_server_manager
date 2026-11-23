@@ -9,12 +9,18 @@
   const enabled = $derived($proxies[machine.id])
 
   async function toggle(e: Event) {
-    const next = (e.currentTarget as HTMLInputElement).checked
+    const input = e.currentTarget as HTMLInputElement
+    const next = input.checked
     busy = true
     try {
       await changeProxy(machine, next)
     } finally {
       busy = false
+      // The checkbox flips itself before the change is confirmed. If the save
+      // failed, changeProxy's refresh leaves the store at the old value and
+      // Svelte may not re-write the DOM because the value did not change, so
+      // snap the control back to the authoritative state explicitly.
+      input.checked = $proxies[machine.id] ?? false
     }
   }
 
@@ -42,8 +48,6 @@
       aria-label="Toggle the OpenAI-compatible proxy"
     />
     <span class="track"></span>
-    {#if !compact}
-      <span class="switch-text">{busy ? 'Saving…' : enabled ? 'Proxy on' : 'Proxy off'}</span>
-    {/if}
+    <span class="switch-text">{busy ? 'Saving…' : enabled ? 'Proxy on' : 'Proxy off'}</span>
   </label>
 {/if}

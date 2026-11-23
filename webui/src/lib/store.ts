@@ -1,4 +1,4 @@
-import { get, writable } from 'svelte/store'
+import { derived, get, writable } from 'svelte/store'
 import { ApiError, getFleet, getProxy, getRunning, getSystem, getWorkerSystem } from './api'
 import type {
   FleetMachine,
@@ -57,6 +57,39 @@ export const statuses = writable<Record<string, MachineStatus>>({})
  * those fall back to the single-card view. `undefined` = not probed yet.
  */
 export const fleetViews = writable<Record<string, FleetMachine[] | null>>({})
+
+/**
+ * Number of hosts the UI is watching: each fleet-capable manager contributes
+ * its local machine plus any workers, while a standalone/legacy manager
+ * contributes one. Shared by the header readout and the fleet page kicker so
+ * the two counts cannot drift.
+ */
+export const fleetNodeCount = derived(
+  [machines, fleetViews],
+  ([$machines, $fleetViews]) =>
+    $machines.reduce(
+      (total, machine) => total + Math.max(1, $fleetViews[machine.id]?.length ?? 1),
+      0,
+    ),
+)
+
+/**
+ * Number of offline hosts, derived only from machines still in the registry.
+ * A deleted machine can leave a stale key behind in statuses/fleetViews (an
+ * in-flight poll can also land after removal), so iterating the raw maps would
+ * keep counting ghosts in the header readout.
+ */
+export const fleetOfflineCount = derived(
+  [machines, statuses, fleetViews],
+  ([$machines, $statuses, $fleetViews]) =>
+    $machines.reduce((total, machine) => {
+      const entries = $fleetViews[machine.id]
+      if (entries) {
+        return total + entries.filter((entry) => entry.status === 'offline').length
+      }
+      return total + ($statuses[machine.id]?.state === 'offline' ? 1 : 0)
+    }, 0),
+)
 
 /**
  * Runtime proxy state per machine id. `true`/`false` once known; `undefined`
@@ -175,6 +208,7 @@ export async function refreshMachineStatus(m: Machine): Promise<void> {
         ? {
             state: 'running',
             model: running.model_config.alias || running.model_config.name,
+            name: running.model_config.name,
             startTime: running.start_time,
           }
         : { state: 'idle' },
@@ -200,7 +234,12 @@ export async function refreshMachine(m: Machine): Promise<void> {
     statuses.update((s) => ({
       ...s,
       [m.id]: local?.running
-        ? { state: 'running', model: local.running.alias || local.running.name, startTime: local.running.start_time }
+        ? {
+            state: 'running',
+            model: local.running.alias || local.running.name,
+            name: local.running.name,
+            startTime: local.running.start_time,
+          }
         : { state: 'idle' },
     }))
     refreshEntryStats(m, entries)
@@ -225,7 +264,12 @@ export async function refreshMachine(m: Machine): Promise<void> {
     statuses.update((s) => ({
       ...s,
       [m.id]: running
-        ? { state: 'running', model: running.model_config.alias || running.model_config.name, startTime: running.start_time }
+        ? {
+            state: 'running',
+            model: running.model_config.alias || running.model_config.name,
+            name: running.model_config.name,
+            startTime: running.start_time,
+          }
         : { state: 'idle' },
     }))
     if (telemetryActive) void refreshSystem(m, 'local')

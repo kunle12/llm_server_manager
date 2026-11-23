@@ -9,7 +9,10 @@
       <span class="toast-icon">
         <Icon name={t.kind === 'ok' ? 'checkCircle' : 'alert'} size={17} />
       </span>
-      <span>{t.text}</span>
+      <span class="toast-copy">
+        <span class="toast-kind">{t.kind === 'ok' ? 'confirmed' : 'fault'}</span>
+        <span>{t.text}</span>
+      </span>
     </div>
   {/each}
 </div>

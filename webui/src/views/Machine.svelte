@@ -21,6 +21,8 @@
 
   const runningModel = $derived(status?.state === 'running' ? status.model : null)
 
+  const ROW_TINTS = ['var(--sky)', 'var(--peach)', 'var(--lilac)', 'var(--marigold)']
+
   async function load() {
     if (!machine) return
     loading = true
@@ -134,7 +136,8 @@
   <p>Machine not found. <a href="#/fleet">Back to fleet</a>.</p>
 {:else}
   <div class="page-head">
-    <div>
+    <div class="page-title">
+      <span class="kicker">machine control · {status?.state ?? 'checking'}</span>
       <h1>
         <span class="dot {status?.state ?? 'checking'}"></span>
         {machine.name}
@@ -154,7 +157,7 @@
       <button class="btn subtle" onclick={load} disabled={loading}>
         <Icon name="refresh" size={15} /> Refresh
       </button>
-      <a class="btn" href={`#/machine/${id}/config`}>
+      <a class="btn sky" href={`#/machine/${id}/config`}>
         <Icon name="sliders" size={15} /> Edit config
       </a>
     </div>
@@ -183,12 +186,16 @@
           </tr>
         </thead>
         <tbody>
-          {#each models as item (item.name)}
-            <tr class:active={item.active}>
-              <td>
-                <span class="model-name">{item.alias || item.name}</span>
-                {#if item.alias}<span class="alias" title="Proxy alias">→ {item.name}</span>{/if}
-                {#if item.active}<span class="pill running status-inline">Running</span>{/if}
+          {#each models as item, i (item.name)}
+            {@const mark = ROW_TINTS[i % ROW_TINTS.length]}
+            <tr class:active={item.active} style={`--mark: ${mark}`}>
+              <td class="model-cell">
+                <span class="model-icon"><Icon name={item.active ? 'activity' : 'box'} size={14} /></span>
+                <span class="model-text">
+                  <span class="model-name">{item.alias || item.name}</span>
+                  {#if item.alias}<span class="alias" title="Proxy alias">→ {item.name}</span>{/if}
+                  {#if item.active}<span class="pill running status-inline">Running</span>{/if}
+                </span>
               </td>
               <td class="path" title={item.launch_cmd || item.model_path}>
                 {item.launch_cmd || item.model_path}
@@ -236,19 +243,80 @@
     display: flex;
     align-items: center;
     gap: 0.55rem;
+    overflow-wrap: anywhere;
+  }
+
+  h1 .dot {
+    width: 10px;
+    height: 10px;
+  }
+
+  .model-cell {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    position: relative;
+    padding-left: 1.4rem;
+  }
+
+  .model-cell::before {
+    content: '';
+    position: absolute;
+    left: 0.45rem;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 4px;
+    height: 24px;
+    border-radius: 0 3px 3px 0;
+    background: var(--mark, var(--lilac));
+  }
+
+  .model-icon {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    flex: none;
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--mark, var(--lilac)) 55%, transparent);
+    color: var(--text);
+  }
+
+  .model-text {
+    min-width: 0;
   }
 
   .model-name {
-    font-weight: 550;
+    font-weight: 600;
   }
 
   .alias {
     color: var(--muted);
-    font-size: 0.82rem;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
     margin-left: 0.4rem;
   }
 
   .status-inline {
     margin-left: 0.5rem;
+    vertical-align: 1px;
+  }
+
+  @media (max-width: 640px) {
+    .model-cell {
+      padding-left: 1.2rem;
+      margin-bottom: 0.15rem;
+    }
+
+    .model-cell::before {
+      left: 0.25rem;
+      height: 26px;
+    }
+
+    .alias {
+      display: inline-block;
+      margin-left: 0.35rem;
+    }
   }
 </style>

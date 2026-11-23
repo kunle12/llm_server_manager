@@ -4,8 +4,9 @@
   import MachineMetrics from '../lib/MachineMetrics.svelte'
   import ProxySwitch from '../lib/ProxySwitch.svelte'
   import {
-    machines,
+    fleetNodeCount,
     fleetViews,
+    machines,
     refreshMachine,
     setTelemetryActive,
     statuses,
@@ -27,6 +28,21 @@
   let confirmStop = $state<string | null>(null)
   let busy = $state<string | null>(null)
   let pickedModel = $state<Record<string, string>>({})
+
+  // LCARS command blocks: each card and each entry gets its own colour,
+  // cycling so a large fleet stays readable and never repeats adjacently.
+  const CARD_TINTS = [
+    { tint: 'var(--peach)', on: 'var(--on-peach)' },
+    { tint: 'var(--lilac)', on: 'var(--on-lilac)' },
+    { tint: 'var(--sky)', on: 'var(--on-sky)' },
+    { tint: 'var(--marigold)', on: 'var(--on-marigold)' },
+  ]
+  const ENTRY_TINTS = [
+    { tint: 'var(--sky)', on: 'var(--on-sky)' },
+    { tint: 'var(--peach)', on: 'var(--on-peach)' },
+    { tint: 'var(--lilac)', on: 'var(--on-lilac)' },
+    { tint: 'var(--mauve)', on: 'var(--on-mauve)' },
+  ]
 
   function displayName(item: ModelItem): string {
     return item.alias || item.name
@@ -104,7 +120,11 @@
 </script>
 
 <div class="page-head">
-  <div>
+  <div class="page-title">
+    <span class="kicker">
+      fleet control · {$fleetNodeCount}
+      {$fleetNodeCount === 1 ? 'node' : 'nodes'}
+    </span>
     <h1>Fleet</h1>
     <p class="sub">Monitor and control every model across your machines.</p>
   </div>
@@ -124,11 +144,13 @@
   </div>
 {:else}
   <div class="fleet-cards">
-    {#each $machines as m (m.id)}
+    {#each $machines as m, i (m.id)}
+      {@const tint = CARD_TINTS[i % CARD_TINTS.length]}
       {@const fv = $fleetViews[m.id]}
       {#if fv === undefined}
-        <article class="card machine">
+        <article class="card machine" style={`--tint: ${tint.tint}; --on-tint: ${tint.on}`}>
           <div class="machine-head">
+            <span class="deck-no">{String(i + 1).padStart(2, '0')}</span>
             <div class="machine-title">
               <span class="dot checking"></span>
               <a class="machine-name" href={`#/machine/${m.id}`}>{m.name}</a>
@@ -139,8 +161,9 @@
           <div class="entry"><p class="muted">Contacting {m.name}…</p></div>
         </article>
       {:else if fv !== null}
-        <article class="card machine">
+        <article class="card machine" style={`--tint: ${tint.tint}; --on-tint: ${tint.on}`}>
           <div class="machine-head">
+            <span class="deck-no">{String(i + 1).padStart(2, '0')}</span>
             <div class="machine-title">
               <a class="machine-name" href={`#/machine/${m.id}`}>{m.name}</a>
             </div>
@@ -149,11 +172,15 @@
           </div>
 
           <ul class="entries">
-            {#each fv as entry (entry.machine)}
+            {#each fv as entry, j (entry.machine)}
               {@const k = systemKey(m.id, entry.machine)}
+              {@const et = ENTRY_TINTS[j % ENTRY_TINTS.length]}
               <li class="entry entry-row">
                 <div class="entry-info">
                   <div class="entry-head">
+                    <span class="entry-badge" style={`--tint: ${et.tint}; --on-tint: ${et.on}`}>
+                      <Icon name={isLocal(entry) ? 'server' : 'activity'} size={14} />
+                    </span>
                     <span class="dot {entry.status}"></span>
                     <span class="entry-name">{entry.machine}</span>
                     {#if isLocal(entry)}<span class="tag">this machine</span>{/if}
@@ -250,8 +277,9 @@
       {:else}
         {@const st = $statuses[m.id] ?? { state: 'checking' }}
         {@const lk = systemKey(m.id, 'local')}
-        <article class="card machine">
+        <article class="card machine" style={`--tint: ${tint.tint}; --on-tint: ${tint.on}`}>
           <div class="machine-head">
+            <span class="deck-no">{String(i + 1).padStart(2, '0')}</span>
             <div class="machine-title">
               <span class="dot {st.state}"></span>
               <a class="machine-name" href={`#/machine/${m.id}`}>{m.name}</a>
@@ -263,6 +291,14 @@
           <ul class="entries">
             <li class="entry entry-row">
               <div class="entry-info">
+                <div class="entry-head">
+                  <span class="entry-badge" style="--tint: var(--sky); --on-tint: var(--on-sky)">
+                    <Icon name="server" size={14} />
+                  </span>
+                  <span class="dot {st.state}"></span>
+                  <span class="entry-name">local node</span>
+                  <span class="tag">this machine</span>
+                </div>
                 {#if st.state === 'running'}
                   <div class="entry-body">
                     <span class="entry-model">{st.model}</span>
@@ -274,7 +310,7 @@
                       <button
                         class="btn danger"
                         disabled={busy === lk}
-                        onclick={() => doStopLocal(m.id, st.model!)}
+                        onclick={() => doStopLocal(m.id, st.name ?? st.model!)}
                       >
                         Stop
                       </button>

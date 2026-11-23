@@ -220,7 +220,8 @@
   <p>Machine not found. <a href="#/fleet">Back to fleet</a>.</p>
 {:else}
   <div class="page-head">
-    <div>
+    <div class="page-title">
+      <span class="kicker">configuration · raw json</span>
       <h1>Configuration</h1>
       <p class="sub">Raw JSON for <strong>{machine.name}</strong></p>
     </div>

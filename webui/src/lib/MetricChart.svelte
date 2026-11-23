@@ -41,6 +41,9 @@
     width: 100%;
     height: 72px;
     margin-top: 0.6rem;
+    border-radius: 4px;
+    background: var(--panel-3);
+    background: color-mix(in srgb, var(--metric-color, var(--accent)) 5%, transparent);
   }
 
   .slot {
@@ -48,10 +51,8 @@
     flex: 1;
     min-width: 1px;
     overflow: hidden;
-    border-radius: 3px;
-    /* Fallback for browsers without color-mix(); the tinted value wins there. */
-    background: var(--panel-3);
-    background: color-mix(in srgb, var(--metric-color, var(--accent)) 7%, transparent);
+    border-radius: 0 3px 3px 0;
+    background: transparent;
   }
 
   .bar {
@@ -59,7 +60,7 @@
     right: 0;
     bottom: 0;
     left: 0;
-    border-radius: 3px 3px 1px 1px;
+    border-radius: 0 3px 3px 0;
     background: var(--metric-color, var(--accent));
     background: linear-gradient(
       to top,

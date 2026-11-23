@@ -50,7 +50,10 @@ export type MachineState = 'checking' | 'running' | 'idle' | 'offline'
 
 export interface MachineStatus {
   state: MachineState
+  /** Display name (alias when set); use `name` for control calls. */
   model?: string
+  /** Real ModelConfig.Name, accepted by the stop endpoint. */
+  name?: string
   startTime?: string
   error?: string
 }

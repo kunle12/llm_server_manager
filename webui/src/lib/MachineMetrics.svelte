@@ -176,20 +176,24 @@
     min-height: 8.6rem;
     padding: 1rem;
     border: 1px dashed var(--border-strong);
-    border-radius: var(--radius-sm);
+    border-radius: 0 12px 12px 0;
+    background: var(--panel-2);
     color: var(--muted);
     text-align: left;
   }
 
   .metrics-note strong {
     display: block;
-    font-size: 0.84rem;
+    font-family: var(--mono);
+    font-size: 7.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
     color: var(--text);
   }
 
   .metrics-note p {
-    margin: 0.2rem 0 0;
-    font-size: 0.78rem;
+    margin: 0.25rem 0 0;
+    font-size: 0.76rem;
     max-width: 26rem;
   }
 
@@ -199,9 +203,9 @@
     flex: none;
     width: 30px;
     height: 30px;
-    border-radius: 9px;
+    border-radius: 0 9px 9px 0;
     background: var(--panel-3);
-    color: var(--faint);
+    color: var(--dim);
   }
 
   .metric.skeleton {
@@ -211,7 +215,7 @@
     min-height: 8.6rem;
     padding: 0.8rem 0.85rem;
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: 0 12px 12px 0;
     background: var(--panel-2);
   }
 
