@@ -42,6 +42,8 @@
     memory:
       '<rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 10v4M11 10v4M15 10v4M17 17v3M7 17v3M12 17v3"/>',
     activity: '<path d="M3 12h4l2.5-7 4 14 2.5-7H21"/>',
+    return:
+      '<path d="M9.5 19 3.5 13l6-6"/><path d="M3.5 13h9a6.5 6.5 0 0 0 6.5-6.5V3"/>',
   }
 </script>
 

@@ -10,6 +10,7 @@
     setPollingActive,
     settings,
   } from './lib/store'
+  import { toast } from './lib/toast'
   import Toasts from './lib/Toasts.svelte'
   import ConfigEditor from './views/ConfigEditor.svelte'
   import Fleet from './views/Fleet.svelte'
@@ -59,6 +60,27 @@
 
   function toggleTheme() {
     settings.update((s) => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))
+  }
+
+  /**
+   * Return to the Kunle Workspace tab that opened this one: focus it, then
+   * close this tab. Browsers only honour close() for tabs opened by script, so
+   * if it is refused the tab is still here a moment later; tell the operator
+   * to close it manually instead of silently doing nothing.
+   */
+  function returnToWorkspace() {
+    const opener = window.opener as Window | null
+    try {
+      if (opener && !opener.closed) opener.focus()
+    } catch {
+      // A cross-origin opener may refuse focus, but closing still works.
+    }
+    window.close()
+    setTimeout(() => {
+      if (!window.closed) {
+        toast('err', "This tab can't close itself — close it to return to Kunle Workspace.")
+      }
+    }, 250)
   }
 
   $effect(() => {
@@ -154,6 +176,16 @@
       >
         <Icon name="gear" />
       </button>
+      <!-- The bottom command bar is hidden on tablets/phones, so expose the
+           workspace return action in the header there instead. -->
+      <button
+        class="icon-btn accent-sky workspace-mobile"
+        onclick={returnToWorkspace}
+        title="Close this tab and return to Kunle Workspace"
+        aria-label="Close this tab and return to Kunle Workspace"
+      >
+        <Icon name="return" />
+      </button>
     </div>
 
     <div class="readout">
@@ -178,15 +210,23 @@
     </main>
   </div>
 
-  <footer class="bottombar" aria-hidden="true">
-    <div class="seg b1">
+  <footer class="bottombar">
+    <div class="seg b1" aria-hidden="true">
       {nominal ? 'fleet control nominal' : `${offlineCount} signal${offlineCount === 1 ? '' : 's'} lost`}
     </div>
-    <div class="seg b2">
+    <div class="seg b2" aria-hidden="true">
       {$settings.paused ? 'refresh paused' : `refresh ${$settings.pollMs / 1000}s`}
     </div>
-    <div class="seg b3">stardate {stardate}</div>
-    <div class="seg b4">α</div>
+    <div class="seg b3" aria-hidden="true">stardate {stardate}</div>
+    <button
+      class="seg b4 workspace"
+      type="button"
+      onclick={returnToWorkspace}
+      title="Close this tab and return to Kunle Workspace"
+    >
+      <span>Workspace</span>
+      <Icon name="return" size={14} />
+    </button>
   </footer>
 </div>
 

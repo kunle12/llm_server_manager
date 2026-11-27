@@ -438,6 +438,12 @@ code {
   filter: brightness(1.05);
 }
 
+/* The workspace return action lives in the bottom bar on wide screens and
+   moves into the header where that bar is hidden (see the 980px query). */
+.topbar .icon-btn.workspace-mobile {
+  display: none;
+}
+
 .readout {
   display: flex;
   align-items: center;
@@ -565,9 +571,25 @@ code {
 }
 
 .b4 {
-  flex: 0.5;
-  background: var(--amber);
-  color: var(--on-amber);
+  flex: 0.9;
+  background: var(--sky);
+  color: var(--on-sky);
+}
+
+/* Return to the workspace tab that opened this console. */
+.workspace {
+  gap: 7px;
+  cursor: pointer;
+  transition: filter 0.16s ease;
+}
+
+.workspace:hover {
+  filter: brightness(1.05);
+}
+
+.workspace:focus-visible {
+  outline: 2px solid var(--on-sky);
+  outline-offset: -4px;
 }
 
 /* Layout */
@@ -1811,6 +1833,10 @@ textarea.code {
     display: none;
   }
 
+  .topbar .icon-btn.workspace-mobile {
+    display: inline-grid;
+  }
+
   .toasts {
     bottom: 1.1rem;
   }
@@ -2110,6 +2136,27 @@ textarea.code {
 }
 
 @media (max-width: 360px) {
+  /* Six controls in the header at this width: tighten them so the brand and
+     the workspace return action both stay on screen. */
+  .topbar-controls {
+    gap: 2px;
+  }
+
+  .topbar .icon-btn {
+    width: 30px;
+    height: 30px;
+  }
+
+  .brand {
+    padding: 0 10px;
+    gap: 8px;
+  }
+
+  .brand-mark {
+    width: 22px;
+    height: 22px;
+  }
+
   .machine-head {
     gap: 0.35rem;
     padding: 0.7rem 0.6rem;

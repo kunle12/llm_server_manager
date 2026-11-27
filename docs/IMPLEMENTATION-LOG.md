@@ -139,3 +139,27 @@ Counts: 0 CRITICAL, 0 HIGH, 2 MEDIUM, 9 LOW.
   (`-tags embedui`).
 - `dist/llm_server_manager-linux-arm64` — Linux arm64 without the embedded UI.
 - Both are gitignored; the release binaries are built from the committed tree.
+
+## 2026-11-27 — Workspace return action (web UI)
+
+**Scope:** small UI follow-up; no Go/API behaviour changed.
+
+- Replaced the dummy `α` block at the end of the LCARS bottom command bar with
+  a real **Workspace** button (sky block, return-arrow icon), matching the
+  mockup.
+- Clicking it focuses `window.opener` (the Kunle Workspace tab that spawned
+  this console) and calls `window.close()`. Browsers only honour `close()` for
+  script-opened tabs, so a refused close leaves the tab open and shows a toast
+  telling the operator to close it manually rather than failing silently.
+- Moved `aria-hidden` from the footer to the decorative segments so the button
+  is reachable and announced; added hover/focus-visible styling and a `return`
+  icon.
+- Verified in Chromium: a script-opened child tab closes on click and the
+  opener stays current; a directly opened tab shows the fallback toast. Layout
+  checked at 1280px and 1000px; `npm run check` and `npm run build` pass.
+- Mobile/tablet: the bottom bar is hidden at ≤980px, so the same action is now
+  a sky icon button at the end of the header (hidden above 980px). Below 360px
+  the header controls tighten (30px buttons, 2px gaps, smaller brand pad)
+  so the six controls still fit at 320px; clicking it on a phone falls back to
+  the toast because mobile browsers do not permit `window.close()`. Verified at
+  320/360/390/700/980/1000px with no horizontal overflow.
